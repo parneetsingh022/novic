@@ -6,7 +6,6 @@ from novic.ui.frameless import FramelessWindow
 class MainWindow(FramelessWindow):
     def __init__(self):
         super().__init__(title="Novic", size=(900, 600))
-        self.set_resizable(False)
         # populate menus
         self._register_default_menus()
         self.rebuild_menus()

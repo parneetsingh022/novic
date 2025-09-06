@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional
 
-from PySide6.QtWidgets import QMenuBar, QMenu
+from PySide6.QtWidgets import QMenuBar, QMenu, QApplication
 from PySide6.QtGui import QAction
 from PySide6.QtCore import Qt
 
@@ -70,26 +70,31 @@ class MenuDefinition:
                 menubar_or_menu.addAction(built)
 
 class TransparentMenuBar(QMenuBar):
-    """MenuBar that forwards drags on empty space to parent title bar."""
+    """MenuBar that forwards drags only on empty background (not on menu items)."""
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._drag_pos = None
+        self._dragging_window = False
 
-    def mousePressEvent(self, event):
-        act = self.actionAt(event.pos())
-        if act is None and event.button() == Qt.LeftButton and hasattr(self.parent(), "_start_external_drag"):
-            self._drag_pos = event.globalPosition().toPoint()
-            self.parent()._start_external_drag(self._drag_pos)  # type: ignore[attr-defined]
+    def mousePressEvent(self, event):  # type: ignore
+        if event.button() == Qt.LeftButton and self.actionAt(event.pos()) is None and hasattr(self.parent(), "_start_external_drag"):
+            self._dragging_window = True
+            self.parent()._start_external_drag(event.globalPosition().toPoint())  # type: ignore[attr-defined]
+            event.accept()
+            return
         super().mousePressEvent(event)
 
-    def mouseMoveEvent(self, event):
-        if self._drag_pos and event.buttons() & Qt.LeftButton and hasattr(self.parent(), "_continue_external_drag"):
+    def mouseMoveEvent(self, event):  # type: ignore
+        if self._dragging_window and (event.buttons() & Qt.LeftButton) and hasattr(self.parent(), "_continue_external_drag"):
             self.parent()._continue_external_drag(event.globalPosition().toPoint())  # type: ignore[attr-defined]
-        else:
-            super().mouseMoveEvent(event)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
 
-    def mouseReleaseEvent(self, event):
-        self._drag_pos = None
+    def mouseReleaseEvent(self, event):  # type: ignore
+        if self._dragging_window and event.button() == Qt.LeftButton:
+            self._dragging_window = False
+            event.accept()
+            return
         super().mouseReleaseEvent(event)
 
 class MenuRegistry:

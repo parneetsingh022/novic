@@ -11,23 +11,19 @@ except Exception:  # pragma: no cover - fallback if not present
 class TitleBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(32)  # height of title bar
+        self.setFixedHeight(32)
         self.setObjectName("TitleBar")
         layout = QHBoxLayout(self)
         layout.setContentsMargins(5, 0, 5, 0)
 
-        # Logo (text removed as requested)
         self.logo = QLabel(self)
         self.logo.setObjectName("logo")
         self.logo.setFixedSize(24, 24)
         self._set_logo_pixmap()
         layout.addWidget(self.logo)
-        # right margin after logo for visual breathing room
         layout.addSpacing(8)
 
-        # Placeholder for menu bar (injected later)
         self.menu_bar = None  # type: ignore
-
         layout.addStretch()
 
         icon_size = QSize(14, 14)
@@ -53,9 +49,10 @@ class TitleBar(QWidget):
         self.btn_close = make_btn("close.svg", "Close")
         self.btn_close.clicked.connect(self.on_close)
         layout.addWidget(self.btn_close)
-        # track resizable (default True) and apply styling
+
         self._resizable = True
         self._apply_styles()
+        self._drag_pos = None  # background drag state
 
     # --- handlers ---
     def on_minimize(self):
@@ -205,5 +202,37 @@ class TitleBar(QWidget):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
+    # --- direct background dragging (outside menubar & buttons) ---
+    def mousePressEvent(self, event):  # type: ignore
+        if event.button() == Qt.LeftButton:
+            child = self.childAt(event.position().toPoint())
+            # Avoid intercepting clicks meant for buttons or menu bar
+            interactive = {self.btn_min, self.btn_max, self.btn_close}
+            if child in interactive:
+                return super().mousePressEvent(event)
+            if self.menu_bar and (child is self.menu_bar or self.menu_bar.isAncestorOf(child)):
+                return super().mousePressEvent(event)
+            # start drag
+            self._drag_pos = event.globalPosition().toPoint()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):  # type: ignore
+        if self._drag_pos and (event.buttons() & Qt.LeftButton):
+            diff = event.globalPosition().toPoint() - self._drag_pos
+            self.window().move(self.window().pos() + diff)
+            self._drag_pos = event.globalPosition().toPoint()
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):  # type: ignore
+        if event.button() == Qt.LeftButton and self._drag_pos:
+            self._drag_pos = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 

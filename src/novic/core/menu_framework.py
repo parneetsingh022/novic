@@ -10,18 +10,26 @@ ActionCallback = Callable[[], None]
 
 @dataclass
 class MenuAction:
+    """Represents either a normal action, a separator, or a nested submenu.
+
+    Use ``MenuAction.submenu(title, actions)`` to create a submenu.
+    Use ``MenuAction.separator()`` to insert a separator line.
+    """
     text: str
     callback: Optional[ActionCallback] = None
     shortcut: str | None = None
     checkable: bool = False
     checked: bool = False
     enabled: bool = True
-    submenu: 'MenuDefinition | None' = None
+    submenu_def: 'MenuDefinition | None' = None  # renamed to avoid clash with factory
+    _separator: bool = False  # internal flag
 
-    def build(self, parent) -> QAction | QMenu:
-        if self.submenu:
+    def build(self, parent) -> QAction | QMenu | None:
+        if self._separator:
+            return None  # handled by container
+        if self.submenu_def:
             menu = QMenu(self.text, parent)
-            self.submenu.build_into(menu)
+            self.submenu_def.build_into(menu)
             return menu
         act = QAction(self.text, parent)
         if self.shortcut:
@@ -34,6 +42,15 @@ class MenuAction:
             act.setChecked(self.checked)
         return act
 
+    # --- helpers ---
+    @classmethod
+    def separator(cls):
+        return cls(text="--", _separator=True, enabled=False)
+
+    @classmethod
+    def submenu(cls, title: str, actions: List['MenuAction']):  # factory returning a submenu action
+        return cls(text=title, submenu_def=MenuDefinition(title, actions))
+
 @dataclass
 class MenuDefinition:
     title: str
@@ -41,7 +58,12 @@ class MenuDefinition:
 
     def build_into(self, menubar_or_menu: QMenuBar | QMenu):
         for item in self.actions:
+            if item._separator:
+                menubar_or_menu.addSeparator()
+                continue
             built = item.build(menubar_or_menu)
+            if built is None:
+                continue
             if isinstance(built, QMenu):
                 menubar_or_menu.addMenu(built)
             else:

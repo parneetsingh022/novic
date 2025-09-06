@@ -22,9 +22,11 @@ class TitleBar(QWidget):
         self.logo.setFixedSize(24, 24)
         self._set_logo_pixmap()
         layout.addWidget(self.logo)
+        # right margin after logo for visual breathing room
+        layout.addSpacing(8)
 
         # Placeholder for menu bar (injected later)
-        self.menu_bar = None  # type: QMenuBar | None
+        self.menu_bar = None  # type: ignore
 
         layout.addStretch()
 
@@ -51,50 +53,29 @@ class TitleBar(QWidget):
         self.btn_close = make_btn("close.svg", "Close")
         self.btn_close.clicked.connect(self.on_close)
         layout.addWidget(self.btn_close)
-
+        # track resizable (default True) and apply styling
+        self._resizable = True
         self._apply_styles()
 
     # --- handlers ---
     def on_minimize(self):
         self.window().showMinimized()
-
+    
     def on_maximize_restore(self):
-        if self.window().isMaximized():
-            self.window().showNormal()
+        if not self._resizable:
+            return  # ignore when non-resizable
+        win = self.window()
+        if win.isMaximized():
+            win.showNormal()
             self.btn_max.setIcon(QIcon(str(self._icon_path("maximize.svg"))))
             self.btn_max.setToolTip("Maximize")
         else:
-            self.window().showMaximized()
+            win.showMaximized()
             self.btn_max.setIcon(QIcon(str(self._icon_path("restore.svg"))))
             self.btn_max.setToolTip("Restore")
 
     def on_close(self):
         self.window().close()
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
-            self._drag_pos = event.globalPosition().toPoint()
-
-    def mouseMoveEvent(self, event):
-        if event.buttons() == Qt.LeftButton:
-            diff = event.globalPosition().toPoint() - self._drag_pos
-            self.window().move(self.window().pos() + diff)
-            self._drag_pos = event.globalPosition().toPoint()
-
-    # --- public API ---
-    def attach_menus(self, registry):
-        """Build and attach a menubar into the title bar (after title)."""
-        if self.menu_bar:
-            self.layout().removeWidget(self.menu_bar)
-            self.menu_bar.deleteLater()
-            self.menu_bar = None
-
-        bar = registry.build(self)
-        bar.setFixedHeight(24)
-        bar.setStyleSheet("QMenuBar { background: transparent; }")
-        # Insert right after logo (index 1 since only logo precedes)
-        self.layout().insertWidget(1, bar)
-        self.menu_bar = bar
     # drag API used by TransparentMenuBar
     def _start_external_drag(self, global_pos):
         self._drag_pos = global_pos
@@ -135,38 +116,94 @@ class TitleBar(QWidget):
         pm = QPixmap(str(path))
         if not pm.isNull():
             self.logo.setPixmap(pm.scaled(24, 24, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        # styling handled centrally in _apply_styles
 
     def _apply_styles(self):
-        # use object names for fine-grained styling if needed later
+        arrow_path = self._icon_path("submenu_arrow.svg").as_posix()
         self.setStyleSheet(
-            """
+            f"""
             /* Neutral grey dark theme */
-            #TitleBar { background-color: #2b2d30; color: #e3e5e8; }
-            QLabel#logo { background: transparent; }
-            QMenuBar { background: transparent; padding: 0 8px; }
-            QMenuBar::item { background: transparent; padding: 4px 6px; margin: 0 2px; border-radius:4px; }
-            QMenuBar::item:selected { background: #3a3d41; }
-            QMenuBar::item:pressed { background: #464a4f; }
-            QMenu { 
-                background: #2f3337; 
-                color: #e3e5e8; 
-                border: 1px solid #41464b; 
-                border-radius: 6px; 
-                padding: 6px 0; 
-            }
-            QMenu::separator { height:1px; background: #3e444a; margin:4px 8px; }
-            QMenu::item { padding:6px 14px; border-radius:4px; }
-            QMenu::item:selected { background:#3d444a; }
-            QMenu::item:pressed { background:#464d53; }
-            QPushButton { border: none; background: transparent; }
-            QPushButton:hover { background: #3a3d41; }
-            QPushButton:pressed { background: #464a4f; }
-            QPushButton[role='close']:hover { background: #e74c3c; }
-            QPushButton[role='close']:pressed { background: #c0392b; }
+            #TitleBar {{ background-color: #2b2d30; color: #e3e5e8; }}
+            QLabel#logo {{ background: transparent; }}
+            QMenuBar {{ background: transparent; padding: 0 8px; }}
+            QMenuBar::item {{ background: transparent; padding: 4px 6px; margin: 0 2px; border-radius:4px; }}
+            QMenuBar::item:selected {{ background: #3a3d41; }}
+            QMenuBar::item:pressed {{ background: #464a4f; }}
+            QMenuBar::item:disabled {{ color: #6d7277; background: transparent; }}
+            QMenu {{ background: #2f3337; color: #e3e5e8; border: 1px solid #41464b; border-radius: 6px; padding: 0; }}
+            QMenu::separator {{ height:1px; background: #3e444a; margin:4px 8px; }}
+            QMenu::item {{ padding:6px 14px; margin:0; border-radius:4px; }}
+            QMenu::item:selected {{ background:#3d444a; }}
+            QMenu::item:pressed {{ background:#464d53; }}
+            QMenu::item:disabled {{ color:#5d6369; background:transparent; }}
+            QMenu::right-arrow {{ image: url('{arrow_path}'); width: 12px; height: 12px; }}
+            QPushButton {{ border: none; background: transparent; }}
+            QPushButton:hover {{ background: #3a3d41; }}
+            QPushButton:pressed {{ background: #464a4f; }}
+            QPushButton[role='close']:hover {{ background: #e74c3c; }}
+            QPushButton[role='close']:pressed {{ background: #c0392b; }}
             """
         )
         self.btn_close.setProperty("role", "close")
-        # re-polish to apply dynamic property styling
         self.btn_close.style().unpolish(self.btn_close)
         self.btn_close.style().polish(self.btn_close)
+    # (styling applied in _apply_styles)
+
+    # --- public API ---
+    def attach_menus(self, registry):
+        """Build and attach a menubar into the title bar right after the logo.
+
+        Accepts a MenuRegistry (or compatible object with build(parent)->QMenuBar).
+        Rebuilds cleanly if already present.
+        """
+        if self.menu_bar:
+            try:
+                self.layout().removeWidget(self.menu_bar)
+                self.menu_bar.deleteLater()
+            except Exception:
+                pass
+            self.menu_bar = None
+        if registry is None:
+            return
+        bar = registry.build(self)
+        bar.setFixedHeight(24)
+        bar.setStyleSheet("QMenuBar { background: transparent; }")
+        # insert after logo + spacing (logo index 0, spacing index 1)
+        self.layout().insertWidget(2, bar)
+        self.menu_bar = bar
+
+    def set_resizable(self, flag: bool):
+        """Enable/disable maximize ability (UI only; window logic handled externally)."""
+        self._resizable = flag
+        # show/hide maximize button instead of disabled icon
+        self.btn_max.setVisible(flag)
+        self.btn_max.setEnabled(flag)
+        if not flag and self.window().isMaximized():
+            # restore if currently maximized to avoid stuck state
+            try:
+                self.window().showNormal()
+                self.btn_max.setIcon(QIcon(str(self._icon_path("maximize.svg"))))
+                self.btn_max.setToolTip("Maximize")
+            except Exception:
+                pass
+        if flag:
+            # ensure correct icon state when re-enabled
+            if self.window().isMaximized():
+                self.btn_max.setIcon(QIcon(str(self._icon_path("restore.svg"))))
+                self.btn_max.setToolTip("Restore")
+            else:
+                self.btn_max.setIcon(QIcon(str(self._icon_path("maximize.svg"))))
+                self.btn_max.setToolTip("Maximize")
+        else:
+            # keep last icon but hide button (already hidden); no tooltip change needed
+            pass
+
+    def mouseDoubleClickEvent(self, event):  # type: ignore
+        # Standard title bar double-click to maximize/restore (only if resizable)
+        if event.button() == Qt.LeftButton and self._resizable:
+            self.on_maximize_restore()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
 

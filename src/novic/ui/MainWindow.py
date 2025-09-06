@@ -1,38 +1,18 @@
 # ui/main_window.py
-from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QTextEdit
-from PySide6.QtCore import Qt
-from novic.core.title_bar import TitleBar
-from novic.core.menu_framework import MenuRegistry, MenuDefinition, MenuAction
+from PySide6.QtWidgets import QTextEdit
+from novic.core.menu_framework import MenuDefinition, MenuAction
+from novic.ui.frameless import FramelessWindow
 
-class MainWindow(QMainWindow):
+class MainWindow(FramelessWindow):
     def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Novic")
-        self.setWindowFlags(Qt.FramelessWindowHint)
-        self.resize(900, 600)  # give it a starting size
-
-        # central container + vertical layout
-        central = QWidget(self)
-        layout = QVBoxLayout(central)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        # custom title bar (make sure TitleBar sets a fixed height)
-        self.title_bar = TitleBar(self)
-        layout.addWidget(self.title_bar)
-
-        # Menus integrated directly into title bar
-        self.menu_registry = MenuRegistry()
+        super().__init__(title="Novic", size=(900, 600))
+        self.set_resizable(False)
+        # populate menus
         self._register_default_menus()
-        self.title_bar.attach_menus(self.menu_registry)
-
-        # content below menus (placeholder editor)
-        self.editor = QTextEdit(self)
+        self.rebuild_menus()
+        # editor content
+        self.editor = self.add_content_widget(QTextEdit(self))
         self.editor.setPlaceholderText("Hello, Novic!")
-        layout.addWidget(self.editor)
-
-        # IMPORTANT: attach central widget to the window
-        self.setCentralWidget(central)
 
     # --- menu setup ---
     def _register_default_menus(self):
@@ -41,6 +21,13 @@ class MainWindow(QMainWindow):
             actions=[
                 MenuAction("New", callback=self._file_new, shortcut="Ctrl+N"),
                 MenuAction("Open...", callback=self._file_open, shortcut="Ctrl+O"),
+                # Demonstrate a submenu with placeholder recent files
+                MenuAction.submenu("Open Recent", [
+                    MenuAction("(No recent files)", enabled=False),
+                    MenuAction.separator(),
+                    MenuAction("Clear Recent List", callback=self._clear_recent, enabled=False),
+                ]),
+                MenuAction.separator(),
                 MenuAction("Save", callback=self._file_save, shortcut="Ctrl+S"),
                 MenuAction("Save As...", callback=self._file_save_as),
             ]
@@ -80,4 +67,8 @@ class MainWindow(QMainWindow):
 
     def _about_dialog(self):
         # TODO: implement about dialog (QMessageBox)
+        pass
+
+    def _clear_recent(self):
+        # TODO: implement clearing recent files list
         pass

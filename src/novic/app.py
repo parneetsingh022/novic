@@ -5,6 +5,7 @@ class NovicApplication:
     def __init__(self, argv):
         self.app = QApplication(argv)
         self.window = MainWindow()
+        self.window.resize(800,600)
 
 
     def run(self):

@@ -99,9 +99,8 @@ class MainWindow(FramelessWindow):
         # Custom file icon system (extensions / filenames) while keeping folders iconless.
         try:
             from .file_icons import FileIconProvider, file_icon_registry
-            # Example (commented): register icons here or from a higher-level bootstrap
-            file_icon_registry.register_extension("py", "./novic/resources/icons/files/python_file.png")
-            file_icon_registry.set_default_file("./novic/resources/icons/files/regular_file.png")
+            from .file_icon_config import apply_file_icon_config
+            apply_file_icon_config()  # populate registry from config file
             self.fs_model.setIconProvider(FileIconProvider(file_icon_registry))
         except Exception:
             # Fallback: no icons (safe degrade)

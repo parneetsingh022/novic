@@ -1,5 +1,6 @@
 # ui/main_window.py
-from PySide6.QtWidgets import QTextEdit
+from PySide6.QtWidgets import QTextEdit, QListWidget, QWidget, QHBoxLayout, QVBoxLayout, QLabel, QTreeView, QFileSystemModel, QSizePolicy, QSplitter
+from PySide6.QtCore import QDir, QSize, Qt
 from novic.core.menu_framework import MenuDefinition, MenuAction
 from novic.ui.frameless import FramelessWindow
 
@@ -9,9 +10,10 @@ class MainWindow(FramelessWindow):
         # populate menus
         self._register_default_menus()
         self.rebuild_menus()
-        # editor content
-        self.editor = self.add_content_widget(QTextEdit(self))
-        self.editor.setPlaceholderText("Hello, Novic!")
+        # build main body: left sidebar + editor + footer
+        self._build_body()
+
+
 
     # --- menu setup ---
     def _register_default_menus(self):
@@ -55,6 +57,89 @@ class MainWindow(FramelessWindow):
     def _file_open(self):
         # TODO: implement file dialog
         pass
+
+    # --- layout construction ---
+    def _build_body(self):
+        body = QWidget(self)
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(0)
+
+        splitter = QSplitter(Qt.Horizontal, body)
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(4)
+
+        # Sidebar -------------------------------------------------
+        sidebar = QWidget(splitter)
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(6, 4, 0, 4)
+        sidebar_layout.setSpacing(4)
+        sidebar.setMinimumWidth(160)
+
+        label = QLabel("Explorer", sidebar)
+        label.setStyleSheet("color:#cfd2d6; font-weight:bold; font-size:11px; margin-left:2px;")
+        sidebar_layout.addWidget(label)
+
+        self.fs_model = QFileSystemModel(self)
+        self.fs_model.setRootPath(QDir.currentPath())
+        self.fs_model.setFilter(QDir.AllDirs | QDir.NoDotAndDotDot | QDir.Files)
+        tree = QTreeView(sidebar)
+        tree.setModel(self.fs_model)
+        tree.setRootIndex(self.fs_model.index(QDir.currentPath()))
+        tree.setHeaderHidden(True)
+        for col in range(1, self.fs_model.columnCount()):
+            tree.setColumnHidden(col, True)
+        tree.setAlternatingRowColors(False)
+        tree.setIndentation(14)
+        tree.setExpandsOnDoubleClick(True)
+        tree.setAnimated(True)
+        tree.setIconSize(QSize(16, 16))
+        tree.setStyleSheet(
+            "QTreeView { background:#242629; color:#e3e5e8; border:none; outline:0; }"
+            "QTreeView::item:selected { background:#3a3d41; }"
+            "QTreeView::branch { background: transparent; }"
+        )
+        tree.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.tree = tree
+        sidebar_layout.addWidget(tree)
+        splitter.addWidget(sidebar)
+
+        # Editor --------------------------------------------------
+        editor = QTextEdit(splitter)
+        editor.setPlaceholderText("Start typing...")
+        editor.setStyleSheet("QTextEdit { background:#1f2123; color:#e3e5e8; border:none; padding:6px; }")
+        self.editor = editor
+        splitter.addWidget(editor)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+
+        # Initial sizes (prevents startup gap) --------------------
+        sidebar_initial = 220
+        editor_initial = max(300, self.width() - sidebar_initial)
+        splitter.setSizes([sidebar_initial, editor_initial])
+
+        # Handle styling (invisible unless hover) -----------------
+        splitter.setStyleSheet(
+            "QSplitter::handle { background: transparent; }"
+            "QSplitter::handle:horizontal:hover { background: rgba(255,255,255,0.06); }"
+        )
+        body_layout.addWidget(splitter, 1)
+
+        # Footer --------------------------------------------------
+        footer = QWidget(body)
+        footer.setFixedHeight(18)
+        footer.setStyleSheet("background:#2b2d30; border-top:1px solid #3a3d41;")
+        footer_layout = QHBoxLayout(footer)
+        footer_layout.setContentsMargins(8, 0, 8, 0)
+        footer_layout.setSpacing(12)
+        status_label = QLabel("Ready", footer)
+        status_label.setStyleSheet("color:#8d949a; font-size:10px;")
+        footer_layout.addWidget(status_label)
+        footer_layout.addStretch()
+        self.status_label = status_label
+        body_layout.addWidget(footer, 0)
+
+        self.add_content_widget(body)
 
     def _file_save(self):
         # TODO: implement save logic

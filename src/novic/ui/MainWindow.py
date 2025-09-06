@@ -60,26 +60,39 @@ class MainWindow(FramelessWindow):
 
     # --- layout construction ---
     def _build_body(self):
+        # Root body widget
         body = QWidget(self)
         body_layout = QVBoxLayout(body)
         body_layout.setContentsMargins(0, 0, 0, 0)
         body_layout.setSpacing(0)
 
+        # Splitter (sidebar | editor)
         splitter = QSplitter(Qt.Horizontal, body)
         splitter.setChildrenCollapsible(False)
-        splitter.setHandleWidth(4)
+        splitter.setHandleWidth(2)  # thin divider
 
         # Sidebar -------------------------------------------------
         sidebar = QWidget(splitter)
         sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(6, 4, 0, 4)
-        sidebar_layout.setSpacing(4)
+        # Full bleed header & tree; no bottom margin so it touches footer area
+        sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        sidebar_layout.setSpacing(0)
         sidebar.setMinimumWidth(160)
 
-        label = QLabel("Explorer", sidebar)
-        label.setStyleSheet("color:#cfd2d6; font-weight:bold; font-size:11px; margin-left:2px;")
-        sidebar_layout.addWidget(label)
+        # Header (Explorer)
+        header = QWidget(sidebar)
+        header.setFixedHeight(24)
+        header.setStyleSheet("background:#242629; border: none;")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(8, 0, 4, 0)
+        header_layout.setSpacing(0)
+        header_label = QLabel("Explorer", header)
+        header_label.setStyleSheet("color:#cfd2d6; font-weight:bold; font-size:11px;")
+        header_layout.addWidget(header_label)
+        header_layout.addStretch()
+        sidebar_layout.addWidget(header)
 
+        # File system tree
         self.fs_model = QFileSystemModel(self)
         self.fs_model.setRootPath(QDir.currentPath())
         self.fs_model.setFilter(QDir.AllDirs | QDir.NoDotAndDotDot | QDir.Files)
@@ -113,15 +126,15 @@ class MainWindow(FramelessWindow):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
 
-        # Initial sizes (prevents startup gap) --------------------
+        # Initial sizes (avoid startup gap)
         sidebar_initial = 220
         editor_initial = max(300, self.width() - sidebar_initial)
         splitter.setSizes([sidebar_initial, editor_initial])
 
-        # Handle styling (invisible unless hover) -----------------
+        # Handle styling: thin light divider, brighter on hover
         splitter.setStyleSheet(
-            "QSplitter::handle { background: transparent; }"
-            "QSplitter::handle:horizontal:hover { background: rgba(255,255,255,0.06); }"
+            "QSplitter::handle { background:#303234; }"
+            "QSplitter::handle:horizontal:hover { background:#3a3d41; }"
         )
         body_layout.addWidget(splitter, 1)
 
@@ -139,6 +152,7 @@ class MainWindow(FramelessWindow):
         self.status_label = status_label
         body_layout.addWidget(footer, 0)
 
+        # Attach body to window
         self.add_content_widget(body)
 
     def _file_save(self):

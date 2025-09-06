@@ -1,6 +1,8 @@
 # ui/main_window.py
-from PySide6.QtWidgets import QTextEdit, QListWidget, QWidget, QHBoxLayout, QVBoxLayout, QLabel, QTreeView, QFileSystemModel, QSizePolicy, QSplitter
-from PySide6.QtCore import QDir, QSize, Qt
+from PySide6.QtWidgets import QTextEdit, QListWidget, QWidget, QHBoxLayout, QVBoxLayout, QLabel, QTreeView, QFileSystemModel, QSizePolicy, QSplitter, QFileIconProvider
+from pathlib import Path
+from PySide6.QtGui import QIcon
+from PySide6.QtCore import QDir, QSize, Qt, QObject, QEvent
 from novic.core.menu_framework import MenuDefinition, MenuAction
 from novic.ui.frameless import FramelessWindow
 
@@ -94,6 +96,19 @@ class MainWindow(FramelessWindow):
 
         # File system tree
         self.fs_model = QFileSystemModel(self)
+        # Custom file icon system (extensions / filenames) while keeping folders iconless.
+        try:
+            from .file_icons import FileIconProvider, file_icon_registry
+            # Example (commented): register icons here or from a higher-level bootstrap
+            file_icon_registry.register_extension("py", "./novic/resources/icons/files/python_file.png")
+            file_icon_registry.set_default_file("./novic/resources/icons/files/regular_file.png")
+            self.fs_model.setIconProvider(FileIconProvider(file_icon_registry))
+        except Exception:
+            # Fallback: no icons (safe degrade)
+            class _EmptyIconProvider(QFileIconProvider):
+                def icon(self, *_):
+                    return QIcon()
+            self.fs_model.setIconProvider(_EmptyIconProvider())
         self.fs_model.setRootPath(QDir.currentPath())
         self.fs_model.setFilter(QDir.AllDirs | QDir.NoDotAndDotDot | QDir.Files)
         tree = QTreeView(sidebar)
@@ -106,14 +121,46 @@ class MainWindow(FramelessWindow):
         tree.setIndentation(14)
         tree.setExpandsOnDoubleClick(True)
         tree.setAnimated(True)
-        tree.setIconSize(QSize(16, 16))
+        # Show custom file icons (keep small). Zero size previously hid them entirely.
+        tree.setIconSize(QSize(14, 14))
+        # Resolve absolute paths for branch chevron icons to avoid working-dir issues
+        resources_dir = Path(__file__).resolve().parent.parent / "resources" / "icons"
+        chevron_right = (resources_dir / "chevron_right.svg").as_posix()
+        chevron_down = (resources_dir / "chevron_down.svg").as_posix()
         tree.setStyleSheet(
-            "QTreeView { background:#242629; color:#e3e5e8; border:none; outline:0; }"
+            # 5px horizontal margin requested for branch icons & text
+            "QTreeView { background:#242629; color:#e3e5e8; border:none; outline:0; padding-left:5px; }"
+            "QTreeView::viewport { margin-left:5px; }"
+            "QTreeView::item { padding-left:2px; }"      # space between branch/chevron & icon/text
             "QTreeView::item:selected { background:#3a3d41; }"
-            "QTreeView::branch { background: transparent; }"
+            "QTreeView::branch { background: transparent; margin-left:0px; }"
+            f"QTreeView::branch:has-children:!has-siblings:closed,QTreeView::branch:closed:has-children {{ image: url({chevron_right}); }}"
+            f"QTreeView::branch:open:has-children:!has-siblings,QTreeView::branch:open:has-children {{ image: url({chevron_down}); }}"
         )
         tree.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.tree = tree
+        # Hover pointer cursor over items
+        tree.setMouseTracking(True)
+        class _CursorFilter(QObject):
+            def eventFilter(self, obj, event):
+                if event.type() == QEvent.MouseMove:
+                    idx = tree.indexAt(event.pos())
+                    if idx.isValid():
+                        tree.viewport().setCursor(Qt.PointingHandCursor)
+                    else:
+                        tree.viewport().unsetCursor()
+                return False
+        _cf = _CursorFilter(tree)
+        tree.viewport().installEventFilter(_cf)
+        self._tree_cursor_filter = _cf  # keep reference
+        # Single-click toggle expand/collapse when clicking directory text
+        def _toggle(index):
+            if self.fs_model.isDir(index):
+                if tree.isExpanded(index):
+                    tree.collapse(index)
+                else:
+                    tree.expand(index)
+        tree.clicked.connect(_toggle)
         sidebar_layout.addWidget(tree)
         splitter.addWidget(sidebar)
 

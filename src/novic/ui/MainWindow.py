@@ -1,5 +1,7 @@
 # ui/main_window.py
-from PySide6.QtWidgets import QTextEdit, QListWidget, QWidget, QHBoxLayout, QVBoxLayout, QLabel, QTreeView, QFileSystemModel, QSizePolicy, QSplitter, QFileIconProvider
+from PySide6.QtWidgets import (QTextEdit, QListWidget, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
+                               QTreeView, QFileSystemModel, QSizePolicy, QSplitter, QFileIconProvider,
+                               QDialog, QPushButton, QScrollArea, QFrame)
 from pathlib import Path
 from PySide6.QtGui import QIcon
 from PySide6.QtCore import QDir, QSize, Qt, QObject, QEvent
@@ -8,12 +10,15 @@ from novic.ui.frameless import FramelessWindow
 
 class MainWindow(FramelessWindow):
     def __init__(self):
-        super().__init__(title="Novic", size=(900, 600))
+        # Non-resizable and hide menu bar per request (menu still built for About action trigger)
+        super().__init__(title="Novic", size=(900, 600), resizable=False, show_menu=True)
         # populate menus
         self._register_default_menus()
         self.rebuild_menus()
         # build main body: left sidebar + editor + footer
         self._build_body()
+        # Disable resize visuals entirely
+        self.set_resizable(False)
 
 
 
@@ -210,8 +215,88 @@ class MainWindow(FramelessWindow):
         pass
 
     def _about_dialog(self):
-        # TODO: implement about dialog (QMessageBox)
-        pass
+                from novic import __version__ as app_version
+                import platform, textwrap
+                from PySide6.QtCore import qVersion
+
+                py_ver = platform.python_version()
+                os_info = platform.platform()
+                qt_ver = qVersion()
+                icon_path = Path(__file__).resolve().parent.parent / "resources" / "icons" / "novic_logo.png"
+                icon_path_str = icon_path.as_posix()
+                html = f"""
+                        <div style='color:#e3e5e8; font-family:Segoe UI, sans-serif; padding:6px 10px 10px 10px;'>
+                            <div style='display:flex; align-items:center; gap:10px; margin:0 0 6px 0;'>
+                                <img src='{icon_path_str}' width='80' height='80' style='border-radius:6px; padding:4px; border:1px solid #3a3d41;' />
+                                <div>
+                                    <h2 style='margin:0; font-size:18px; line-height:18px;'>Novic <span style="opacity:.65;font-weight:400;font-size:13px;">v{app_version}</span></h2>
+                                    <div style='margin:4px 0 0 0; line-height:140%; font-size:12px; color:#b7bcc1;'>A minimal experimental PySide6 editor scaffold.</div>
+                                </div>
+                            </div>
+                            <h4 style='margin:4px 0 4px 0; font-size:13px; color:#cfd2d6;'>Runtime</h4>
+                            <table style='font-size:11px; border-collapse:collapse;'>
+                                <tr><td style='padding:2px 6px; opacity:.65;'>Python</td><td style='padding:2px 6px;'>{py_ver}</td></tr>
+                                <tr><td style='padding:2px 6px; opacity:.65;'>Qt</td><td style='padding:2px 6px;'>{qt_ver}</td></tr>
+                                <tr><td style='padding:2px 6px; opacity:.65;'>Platform</td><td style='padding:2px 6px;'>{os_info}</td></tr>
+                            </table>
+                            <div style='margin-top:12px; font-size:11px; color:#8d949a;'>© 2025 Novic Project • Apache-2.0 License</div>
+                        </div>
+                        """
+                dlg = QDialog(self)
+                dlg.setWindowTitle("About Novic")
+                if icon_path.exists():
+                        dlg.setWindowIcon(QIcon(str(icon_path)))
+                dlg.setModal(True)
+                dlg.setAttribute(Qt.WA_TranslucentBackground, True)
+                dlg.setFixedWidth(520)
+                outer = QVBoxLayout(dlg)
+                outer.setContentsMargins(0,0,0,0)
+                outer.setSpacing(0)
+                card = QFrame(dlg)
+                card.setObjectName("aboutCard")
+                card.setStyleSheet(
+                        "#aboutCard { background:#242629; border:1px solid #3a3d41;}"
+                        "QPushButton { background:#3a3d41; color:#e3e5e8; border:none; padding:6px 14px; border-radius:4px; font-size:12px; }"
+                        "QPushButton:hover { background:#4a4d51; }"
+                        "QPushButton:pressed { background:#5a5d61; }"
+                )
+                card_layout = QVBoxLayout(card)
+                card_layout.setContentsMargins(18,16,18,14)
+                card_layout.setSpacing(10)
+                scroll = QScrollArea(card)
+                scroll.setWidgetResizable(True)
+                scroll.setFrameShape(QFrame.NoFrame)
+                scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+                scroll.setStyleSheet("QScrollArea { border:none; } QScrollBar:vertical { background:#2b2d30; width:8px; margin:2px; } QScrollBar::handle { background:#44484c; border-radius:3px; } QScrollBar::handle:hover { background:#565a5e; }")
+                content = QWidget()
+                c_layout = QVBoxLayout(content)
+                c_layout.setContentsMargins(6,4,6,6)
+                c_layout.setSpacing(0)
+                lbl = QLabel(content)
+                lbl.setTextFormat(Qt.RichText)
+                lbl.setTextInteractionFlags(Qt.TextSelectableByMouse | Qt.LinksAccessibleByMouse)
+                lbl.setOpenExternalLinks(True)
+                lbl.setWordWrap(True)
+                lbl.setText(html)
+                c_layout.addWidget(lbl)
+                c_layout.addStretch()
+                scroll.setWidget(content)
+                card_layout.addWidget(scroll, 1)
+                btn_row = QHBoxLayout()
+                btn_row.addStretch()
+                copy_btn = QPushButton("Copy Info", card)
+                close_btn = QPushButton("Close", card)
+                btn_row.addWidget(copy_btn)
+                btn_row.addWidget(close_btn)
+                card_layout.addLayout(btn_row)
+                def _copy():
+                        plain = textwrap.dedent(f"""Novic {app_version}\nPython: {py_ver}\nQt: {qt_ver}\nPlatform: {os_info}""").strip()
+                        from PySide6.QtWidgets import QApplication
+                        QApplication.clipboard().setText(plain)
+                copy_btn.clicked.connect(_copy)
+                close_btn.clicked.connect(dlg.close)
+                outer.addWidget(card)
+                dlg.exec()
 
     def _clear_recent(self):
         # TODO: implement clearing recent files list

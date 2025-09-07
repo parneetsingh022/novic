@@ -76,7 +76,39 @@ class _FileTreeView(QTreeView):
                 p = None
             if p:
                 selected_paths.append(p)
-        menu = QMenu(self)
+        # Custom menu subclass to enforce cursor + potential future tweaks
+        class _ContextMenu(QMenu):  # local lightweight subclass
+            def showEvent(self, e):  # type: ignore
+                super().showEvent(e)
+                self.setCursor(Qt.PointingHandCursor)
+        menu = _ContextMenu(self)
+        menu.setCursor(Qt.PointingHandCursor)
+        menu.setStyleSheet(
+            "QMenu {"
+            " background:#2b2e31;"
+            " border:1px solid #3d4145;"
+            " border-radius:8px;"
+            " padding:6px 4px;"
+            " font-size:12px;"
+            " color:#d6d9dd;"
+            "}"
+            "QMenu::separator {"
+            " height:1px;"
+            " background:#404448;"
+            " margin:6px 10px;"
+            "}"
+            "QMenu::item {"
+            " padding:6px 16px;"
+            " border-radius:5px;"
+            "}"
+            "QMenu::item:selected {"
+            " background:#3a4046;"
+            " color:#ffffff;"
+            "}"
+            "QMenu::item:disabled {"
+            " color:#6f7479;"
+            "}"
+        )
 
         def _refresh():
             try:

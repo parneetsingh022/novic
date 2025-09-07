@@ -58,9 +58,12 @@ class MainWindow(FramelessWindow):
         body_layout = QVBoxLayout(body)
         body_layout.setContentsMargins(0,0,0,0)
         body_layout.setSpacing(0)
+
+        # Main horizontal splitter (sidebar | editors) kept as attribute for persistence
         splitter = QSplitter(Qt.Horizontal, body)
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(2)
+        self.splitter = splitter  # store for later session persistence (sizes)
 
         # Sidebar component
         self.sidebar = ActivitySidebar(splitter)
@@ -70,6 +73,7 @@ class MainWindow(FramelessWindow):
         splitter.addWidget(self.editors)
         splitter.setStretchFactor(0,0)
         splitter.setStretchFactor(1,1)
+        # Initial default sizes (will be overridden by session restore if present)
         splitter.setSizes([260, max(300, self.width()-260)])
 
         # Wire file activation from sidebar
@@ -283,6 +287,18 @@ class MainWindow(FramelessWindow):
             data["tabs"] = self.editors.save_state()
         except Exception:
             data["tabs"] = {}
+        # Window size (width & height)
+        try:
+            sz = self.size()
+            data["window"] = {"width": int(sz.width()), "height": int(sz.height())}
+        except Exception:
+            pass
+        # Splitter sizes (sidebar width, editor width)
+        try:
+            if hasattr(self, 'splitter'):
+                data["splitter"] = list(self.splitter.sizes())  # type: ignore[attr-defined]
+        except Exception:
+            pass
         return data
 
     def _restore_session(self):
@@ -295,12 +311,30 @@ class MainWindow(FramelessWindow):
         except Exception:
             return
         if isinstance(payload, dict):
+            # Restore window size first (so child layouts adapt before restoring child state)
+            try:
+                win = payload.get("window", {})
+                if isinstance(win, dict):
+                    w = int(win.get("width", 0) or 0)
+                    h = int(win.get("height", 0) or 0)
+                    if w > 200 and h > 150:  # basic sanity guard
+                        self.resize(w, h)
+            except Exception:
+                pass
             try:
                 self.sidebar.restore_state(payload.get("explorer", {}))
             except Exception:
                 pass
             try:
                 self.editors.restore_state(payload.get("tabs", {}))
+            except Exception:
+                pass
+            # Restore splitter sizes after sidebar + tabs so counts are known
+            try:
+                sp = payload.get("splitter")
+                if isinstance(sp, list) and len(sp) == 2 and all(isinstance(v, int) and v > 0 for v in sp):
+                    if hasattr(self, 'splitter'):
+                        self.splitter.setSizes(sp)  # type: ignore[attr-defined]
             except Exception:
                 pass
 

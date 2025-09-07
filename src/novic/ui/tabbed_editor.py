@@ -106,7 +106,11 @@ class _HoverCloseTabBar(QTabBar):
             else:
                 close_btn.setText('×')
             close_btn.setAccessibleName('Close')
-            close_btn.clicked.connect(lambda _=False, i=idx: self.tabCloseRequested.emit(i))
+            # NOTE: we don't capture the index in a lambda because after tab reordering
+            # the stored index would become stale (especially when moving a tab left),
+            # making the tab impossible to close. Instead we resolve the sender's
+            # current index dynamically in _handle_close_clicked.
+            close_btn.clicked.connect(self._handle_close_clicked)
             close_btn.setStyleSheet(
                 "QToolButton { background: transparent; border:none; padding:0; margin:0; color:#cfd2d6; }"
                 "QToolButton:hover { background:#45484d; color:#ffffff; border-radius:3px; }"
@@ -121,6 +125,16 @@ class _HoverCloseTabBar(QTabBar):
                 if isinstance(btn, QToolButton) and btn.isEnabled():
                     self._replace_with_placeholder(idx)
                 self._active_close_indices.discard(idx)
+
+    def _handle_close_clicked(self):
+        btn = self.sender()
+        if not isinstance(btn, QToolButton):
+            return
+        # Find which tab currently owns this button
+        for i in range(self.count()):
+            if self.tabButton(i, QTabBar.RightSide) is btn:
+                self.tabCloseRequested.emit(i)
+                return
 
 
 class TabbedEditor(QWidget):

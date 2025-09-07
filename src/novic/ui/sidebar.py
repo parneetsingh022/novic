@@ -264,6 +264,22 @@ class ActivitySidebar(QWidget):
             return
         self._load_folder_path(path)
 
+    def close_folder(self):
+        """Close the currently open folder and reset the explorer UI."""
+        if not self._folder_loaded:
+            return
+        # Hide tree, show placeholder
+        self._tree.hide()
+        self._placeholder.show()
+        self._folder_loaded = False
+        self._current_root_path = None
+        # Clear root index (optional visual reset)
+        try:
+            empty_idx = self._fs_model.setRootPath("")  # might be invalid, safe fallback
+            self._tree.setRootIndex(empty_idx)
+        except Exception:
+            pass
+
     # --- state save/restore ----------------------------------------------
     def _load_folder_path(self, path: str):
         """Internal helper to load a folder without prompting."""

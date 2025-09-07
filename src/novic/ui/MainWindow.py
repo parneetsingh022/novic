@@ -26,6 +26,8 @@ class MainWindow(FramelessWindow):
         file_menu = MenuDefinition(title="File", actions=[
             MenuAction("Save", self._file_save, shortcut="Ctrl+S"),
             MenuAction("Save As...", self._file_save_as, shortcut="Ctrl+Shift+S"),
+            MenuAction.separator(),
+            MenuAction("Close Folder", self._file_close_folder),
         ])
         edit_menu = MenuDefinition(title="Edit", actions=[
             MenuAction("Undo", self._edit_undo, shortcut="Ctrl+Z"),
@@ -107,6 +109,13 @@ class MainWindow(FramelessWindow):
     def _file_save_as(self):
         # TODO: implement save-as logic
         pass
+
+    def _file_close_folder(self):
+        if hasattr(self, 'sidebar'):
+            try:
+                self.sidebar.close_folder()
+            except Exception:
+                pass
 
     # --- help handlers ----------------------------------------------------
     def _help_view_logs(self):

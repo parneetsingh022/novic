@@ -1,7 +1,7 @@
 # ui/main_window.py
 from PySide6.QtWidgets import (QTextEdit, QListWidget, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
                                QTreeView, QFileSystemModel, QSizePolicy, QSplitter, QFileIconProvider,
-                               QDialog, QPushButton, QScrollArea, QFrame)
+                               QDialog, QPushButton, QScrollArea, QFrame, QStackedWidget, QToolButton)
 from pathlib import Path
 from PySide6.QtGui import QIcon
 from PySide6.QtCore import QDir, QSize, Qt, QObject, QEvent
@@ -78,16 +78,99 @@ class MainWindow(FramelessWindow):
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(2)  # thin divider
 
-        # Sidebar -------------------------------------------------
-        sidebar = QWidget(splitter)
-        sidebar_layout = QVBoxLayout(sidebar)
-        # Full bleed header & tree; no bottom margin so it touches footer area
+        # Left composite (icon bar + stack) ------------------------------------
+        left_container = QWidget(splitter)
+        left_hbox = QHBoxLayout(left_container)
+        left_hbox.setContentsMargins(0, 0, 0, 0)
+        left_hbox.setSpacing(0)
+
+        # Icon bar (activity bar)
+        nav_bar = QWidget(left_container)
+        nav_bar.setFixedWidth(56)
+        nav_bar.setStyleSheet("background:#1d1f21;")
+        nav_layout = QVBoxLayout(nav_bar)
+        nav_layout.setContentsMargins(0, 6, 0, 6)
+        nav_layout.setSpacing(4)
+
+        def _make_tool(icon_name: str, tooltip: str):
+            btn = QToolButton(nav_bar)
+            btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
+            btn.setFixedSize(56, 44)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setAutoRaise(True)
+            btn.setStyleSheet("QToolButton { background:transparent; border:0; }")
+            icon_path_svg = Path(__file__).resolve().parent.parent / "resources" / "icons" / "side_icon" / f"{icon_name}.svg"
+            icon_path_png = icon_path_svg.with_suffix('.png')
+            if icon_path_svg.exists():
+                btn.setIcon(QIcon(str(icon_path_svg)))
+            elif icon_path_png.exists():
+                btn.setIcon(QIcon(str(icon_path_png)))
+            else:
+                btn.setText(icon_name[:2].upper())
+            btn.setIconSize(QSize(28, 28))
+            btn.setToolTip(tooltip)
+            btn.setCheckable(True)
+            btn.setAutoExclusive(True)
+            return btn
+
+        explorer_btn = _make_tool("explorer", "Explorer")
+        settings_btn = _make_tool("settings", "Settings")
+        explorer_btn.setChecked(True)
+
+        nav_bar.setStyleSheet(
+            nav_bar.styleSheet() +
+            "QToolButton { background:transparent; border:0; padding:0; margin:0; color:#cfd2d6; }"
+            "QToolButton:hover { background:#2a2c2f; }"
+            "QToolButton:checked { background:#303336; }"
+            "QToolButton:focus { outline: none; }"
+            "QToolButton:!hover:!checked { background:transparent; }"
+            "QToolButton::menu-indicator { image: none; width:0; height:0; }"
+        )
+
+        nav_layout.addStretch()  # we will overlay buttons with an indicator container next
+        # Create a container holding buttons and indicator overlay
+        from PySide6.QtWidgets import QFrame
+        buttons_container = QWidget(nav_bar)
+        buttons_container.setFixedWidth(56)
+        bc_layout = QVBoxLayout(buttons_container)
+        bc_layout.setContentsMargins(0,0,0,0)
+        bc_layout.setSpacing(4)
+        bc_layout.addWidget(explorer_btn)
+        bc_layout.addWidget(settings_btn)
+        bc_layout.addStretch()
+        nav_layout.insertWidget(0, buttons_container)
+
+        # Indicator
+        self._side_indicator = QFrame(buttons_container)
+        self._side_indicator.setFixedWidth(4)
+        self._side_indicator.setStyleSheet("background:#2680ff; border:none; border-radius:2px;")
+        self._side_indicator.hide()
+
+        def _move_indicator(btn, checked):
+            if not checked:
+                return
+            self._side_indicator.setFixedHeight(btn.height())
+            y = btn.y()
+            self._side_indicator.move(0, y)
+            if not self._side_indicator.isVisible():
+                self._side_indicator.show()
+
+        explorer_btn.toggled.connect(lambda c: _move_indicator(explorer_btn, c))
+        settings_btn.toggled.connect(lambda c: _move_indicator(settings_btn, c))
+        _move_indicator(explorer_btn, True)
+
+        # Stacked sidebar views
+        stack = QStackedWidget(left_container)
+        stack.setStyleSheet("background:#242629;")
+
+        # Explorer page (migrated from previous sidebar)
+        explorer_page = QWidget()
+        sidebar_layout = QVBoxLayout(explorer_page)
         sidebar_layout.setContentsMargins(0, 0, 0, 0)
         sidebar_layout.setSpacing(0)
-        sidebar.setMinimumWidth(160)
+        explorer_page.setMinimumWidth(160)
 
-        # Header (Explorer)
-        header = QWidget(sidebar)
+        header = QWidget(explorer_page)
         header.setFixedHeight(24)
         header.setStyleSheet("background:#242629; border: none;")
         header_layout = QHBoxLayout(header)
@@ -99,23 +182,20 @@ class MainWindow(FramelessWindow):
         header_layout.addStretch()
         sidebar_layout.addWidget(header)
 
-        # File system tree
         self.fs_model = QFileSystemModel(self)
-        # Custom file icon system (extensions / filenames) while keeping folders iconless.
         try:
             from .file_icons import FileIconProvider, file_icon_registry
             from .file_icon_config import apply_file_icon_config
-            apply_file_icon_config()  # populate registry from config file
+            apply_file_icon_config()
             self.fs_model.setIconProvider(FileIconProvider(file_icon_registry))
         except Exception:
-            # Fallback: no icons (safe degrade)
             class _EmptyIconProvider(QFileIconProvider):
                 def icon(self, *_):
                     return QIcon()
             self.fs_model.setIconProvider(_EmptyIconProvider())
         self.fs_model.setRootPath(QDir.currentPath())
         self.fs_model.setFilter(QDir.AllDirs | QDir.NoDotAndDotDot | QDir.Files)
-        tree = QTreeView(sidebar)
+        tree = QTreeView(explorer_page)
         tree.setModel(self.fs_model)
         tree.setRootIndex(self.fs_model.index(QDir.currentPath()))
         tree.setHeaderHidden(True)
@@ -125,17 +205,14 @@ class MainWindow(FramelessWindow):
         tree.setIndentation(14)
         tree.setExpandsOnDoubleClick(True)
         tree.setAnimated(True)
-        # Show custom file icons (keep small). Zero size previously hid them entirely.
         tree.setIconSize(QSize(14, 14))
-        # Resolve absolute paths for branch chevron icons to avoid working-dir issues
         resources_dir = Path(__file__).resolve().parent.parent / "resources" / "icons"
         chevron_right = (resources_dir / "chevron_right.svg").as_posix()
         chevron_down = (resources_dir / "chevron_down.svg").as_posix()
         tree.setStyleSheet(
-            # 5px horizontal margin requested for branch icons & text
             "QTreeView { background:#242629; color:#e3e5e8; border:none; outline:0; padding-left:5px; }"
             "QTreeView::viewport { margin-left:5px; }"
-            "QTreeView::item { padding-left:2px; }"      # space between branch/chevron & icon/text
+            "QTreeView::item { padding-left:2px; }"
             "QTreeView::item:selected { background:#3a3d41; }"
             "QTreeView::branch { background: transparent; margin-left:0px; }"
             f"QTreeView::branch:has-children:!has-siblings:closed,QTreeView::branch:closed:has-children {{ image: url({chevron_right}); }}"
@@ -143,7 +220,6 @@ class MainWindow(FramelessWindow):
         )
         tree.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.tree = tree
-        # Hover pointer cursor over items
         tree.setMouseTracking(True)
         class _CursorFilter(QObject):
             def eventFilter(self, obj, event):
@@ -156,8 +232,7 @@ class MainWindow(FramelessWindow):
                 return False
         _cf = _CursorFilter(tree)
         tree.viewport().installEventFilter(_cf)
-        self._tree_cursor_filter = _cf  # keep reference
-        # Single-click toggle expand/collapse when clicking directory text
+        self._tree_cursor_filter = _cf
         def _toggle(index):
             if self.fs_model.isDir(index):
                 if tree.isExpanded(index):
@@ -166,7 +241,29 @@ class MainWindow(FramelessWindow):
                     tree.expand(index)
         tree.clicked.connect(_toggle)
         sidebar_layout.addWidget(tree)
-        splitter.addWidget(sidebar)
+
+        # Settings placeholder page
+        settings_page = QWidget()
+        settings_layout = QVBoxLayout(settings_page)
+        settings_layout.setContentsMargins(8, 8, 8, 8)
+        settings_layout.setSpacing(4)
+        ph = QLabel("Settings panel (placeholder)", settings_page)
+        ph.setStyleSheet("color:#cfd2d6; font-size:12px;")
+        settings_layout.addWidget(ph)
+        settings_layout.addStretch()
+
+        stack.addWidget(explorer_page)   # index 0
+        stack.addWidget(settings_page)   # index 1
+        self.sidebar_stack = stack
+
+        left_hbox.addWidget(nav_bar, 0)
+        left_hbox.addWidget(stack, 1)
+        splitter.addWidget(left_container)
+
+        def _activate(idx):
+            stack.setCurrentIndex(idx)
+        explorer_btn.clicked.connect(lambda: _activate(0))
+        settings_btn.clicked.connect(lambda: _activate(1))
 
         # Editor --------------------------------------------------
         editor = QTextEdit(splitter)
@@ -174,11 +271,11 @@ class MainWindow(FramelessWindow):
         editor.setStyleSheet("QTextEdit { background:#1f2123; color:#e3e5e8; border:none; padding:6px; }")
         self.editor = editor
         splitter.addWidget(editor)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(0, 0)  # left composite
+        splitter.setStretchFactor(1, 1)  # editor
 
         # Initial sizes (avoid startup gap)
-        sidebar_initial = 220
+        sidebar_initial = 260  # icon bar + sidebar
         editor_initial = max(300, self.width() - sidebar_initial)
         splitter.setSizes([sidebar_initial, editor_initial])
 
@@ -205,6 +302,7 @@ class MainWindow(FramelessWindow):
 
         # Attach body to window
         self.add_content_widget(body)
+
 
     def _file_save(self):
         # TODO: implement save logic

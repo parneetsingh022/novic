@@ -26,6 +26,7 @@ class ActivitySidebar(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # Root layout
         root_layout = QHBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
@@ -168,6 +169,8 @@ class ActivitySidebar(QWidget):
             f"QTreeView::branch:open:has-children:!has-siblings,QTreeView::branch:open:has-children {{ image: url({chevron_down}); }}"
         )
         self._tree.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._tree.setCursor(Qt.PointingHandCursor)
+        self._tree.setCursor(Qt.PointingHandCursor)
         exp_layout.addWidget(self._tree)
 
         def _toggle(idx):
@@ -177,13 +180,13 @@ class ActivitySidebar(QWidget):
                 else:
                     self._tree.expand(idx)
             else:
-                # open file
                 path = self._fs_model.filePath(idx)
                 if path:
                     self.fileActivated.emit(path)
         self._tree.clicked.connect(_toggle)
         open_btn.clicked.connect(self.open_folder)
         self._folder_loaded = False
+        self._current_root_path = None  # type: ignore[assignment]
 
         # Settings page (placeholder)
         settings_page = QWidget()
@@ -259,6 +262,13 @@ class ActivitySidebar(QWidget):
         path = QFileDialog.getExistingDirectory(self, "Open Folder", QDir.homePath())
         if not path:
             return
+        self._load_folder_path(path)
+
+    # --- state save/restore ----------------------------------------------
+    def _load_folder_path(self, path: str):
+        """Internal helper to load a folder without prompting."""
+        if not path:
+            return
         idx = self._fs_model.setRootPath(path)
         self._tree.setRootIndex(idx)
         for c in range(1, self._fs_model.columnCount()):  # hide extra columns
@@ -266,7 +276,68 @@ class ActivitySidebar(QWidget):
         self._placeholder.hide()
         self._tree.show()
         self._folder_loaded = True
+        self._current_root_path = path
         self.folderOpened.emit(path)
+
+    def save_state(self) -> dict:
+        """Return a serialisable snapshot of the explorer state.
+
+        Structure:
+        {
+            'folder': str | None,      # absolute folder path or None
+            'expanded': [rel paths],   # paths relative to root for expanded dirs
+        }
+        """
+        state: dict[str, object] = {"folder": None, "expanded": []}
+        if not self._folder_loaded or not self._current_root_path:
+            return state
+        root_path = Path(self._current_root_path)
+        expanded: list[str] = []
+
+        def _recurse(parent_index):
+            rows = self._fs_model.rowCount(parent_index)
+            for r in range(rows):
+                idx = self._fs_model.index(r, 0, parent_index)
+                if not idx.isValid():
+                    continue
+                p = Path(self._fs_model.filePath(idx))
+                if self._fs_model.isDir(idx):
+                    if self._tree.isExpanded(idx):
+                        try:
+                            rel = p.relative_to(root_path)
+                            expanded.append(rel.as_posix())
+                        except Exception:
+                            pass
+                        _recurse(idx)
+        root_index = self._tree.rootIndex()
+        _recurse(root_index)
+        state["folder"] = str(root_path)
+        state["expanded"] = expanded
+        return state
+
+    def restore_state(self, state: dict):
+        """Restore explorer from a saved snapshot."""
+        try:
+            folder = state.get("folder") if isinstance(state, dict) else None
+        except Exception:
+            folder = None
+        if not folder or not Path(folder).exists():
+            return
+        self._load_folder_path(folder)
+        expanded = state.get("expanded", []) if isinstance(state, dict) else []
+        if not isinstance(expanded, list):
+            return
+        root_path = Path(folder)
+        for rel in expanded:
+            try:
+                full = (root_path / rel).resolve()
+            except Exception:
+                continue
+            if not full.exists():
+                continue
+            idx = self._fs_model.index(str(full))
+            if idx.isValid():
+                self._tree.expand(idx)
 
 
 __all__ = ["ActivitySidebar"]

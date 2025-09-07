@@ -17,6 +17,8 @@ class MainWindow(FramelessWindow):
         super().__init__(title="Novic", size=(900, 600), resizable=False, show_menu=True)
         self._register_default_menus()
         self._build_body()
+        # restore previous session after UI widgets built
+        self._restore_session()
 
     # --- menu definitions -------------------------------------------------
     def _register_default_menus(self):
@@ -93,8 +95,9 @@ class MainWindow(FramelessWindow):
         # Footer component
         self.footer = StatusFooter(body)
         body_layout.addWidget(self.footer,0)
-
         self.add_content_widget(body)
+        # ensure close event triggers session save
+        self.installEventFilter(self)
 
 
     def _file_save(self):
@@ -255,3 +258,61 @@ class MainWindow(FramelessWindow):
     def _clear_recent(self):
         # TODO: implement clearing recent files list
         pass
+
+    # --- session persistence -------------------------------------------
+    def _session_file(self) -> Path:
+        from pathlib import Path as _P
+        return _P.home() / ".novic_session.json"
+
+    def _gather_session(self) -> dict:
+        data: dict[str, object] = {}
+        try:
+            data["explorer"] = self.sidebar.save_state()
+        except Exception:
+            data["explorer"] = {}
+        try:
+            data["tabs"] = self.editors.save_state()
+        except Exception:
+            data["tabs"] = {}
+        return data
+
+    def _restore_session(self):
+        sf = self._session_file()
+        if not sf.exists():
+            return
+        import json
+        try:
+            payload = json.loads(sf.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        if isinstance(payload, dict):
+            try:
+                self.sidebar.restore_state(payload.get("explorer", {}))
+            except Exception:
+                pass
+            try:
+                self.editors.restore_state(payload.get("tabs", {}))
+            except Exception:
+                pass
+
+    def _save_session(self):
+        sf = self._session_file()
+        import json
+        try:
+            sf.write_text(json.dumps(self._gather_session(), indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def eventFilter(self, obj: QObject, ev: QEvent):  # type: ignore[override]
+        from PySide6.QtCore import QEvent as _QE
+        if ev.type() == _QE.Close:
+            self._save_session()
+        return super().eventFilter(obj, ev)
+
+    def closeEvent(self, event):  # type: ignore[override]
+        # Fallback: ensure session saved even if eventFilter missed
+        try:
+            self._save_session()
+        except Exception:
+            pass
+        super().closeEvent(event)

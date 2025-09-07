@@ -1,7 +1,7 @@
 from __future__ import annotations
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QFileInfo, QSize
+from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QIcon, QMouseEvent
 from PySide6.QtWidgets import (
     QWidget,
@@ -10,26 +10,24 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QTextEdit,
     QToolButton,
-    QStyle,
 )
 
 
 class _HoverCloseTabBar(QTabBar):
-    """A QTabBar that only shows a close button when hovering a tab.
-
-    We dynamically install/remove a QToolButton as the RightSide tab button
-    for the hovered tab. This avoids always-visible close buttons and any
-    red/colored background; the button uses the standard window close icon.
+    """Custom tab bar showing:
+    - Close button always on the selected tab
+    - Close button on any other tab while hovered
+    - Pointer cursor over tabs & close button
+    - Stable tab widths (placeholder button for all tabs)
     """
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMouseTracking(True)
         self._hover_index: int = -1
-        # Track indices that currently have an active (enabled) close button so we can diff
         self._active_close_indices: set[int] = set()
 
-    # Ensure placeholder button exists for a tab index
+    # ---- placeholder mgmt -------------------------------------------------
     def _ensure_placeholder(self, index: int):
         if 0 <= index < self.count():
             existing = self.tabButton(index, QTabBar.RightSide)
@@ -54,18 +52,18 @@ class _HoverCloseTabBar(QTabBar):
         for i in range(self.count()):
             self._ensure_placeholder(i)
 
-    # Called by Qt when a tab is inserted; we add placeholder immediately to avoid size jump
     def tabInserted(self, index: int):  # type: ignore[override]
         super().tabInserted(index)
         self._ensure_placeholder(index)
+        self._update_close_buttons()
 
-    # --- Qt events -------------------------------------------------
+    # ---- events -----------------------------------------------------------
     def mouseMoveEvent(self, event: QMouseEvent):  # type: ignore[override]
         idx = self.tabAt(event.position().toPoint() if hasattr(event, "position") else event.pos())
         if idx != self._hover_index:
             self._hover_index = idx
-            self._update_close_button()
-        # Change cursor to pointing hand when over a tab (any tab index >=0)
+            self._update_close_buttons()
+        # cursor
         if idx >= 0:
             if self.cursor().shape() != Qt.PointingHandCursor:
                 self.setCursor(Qt.PointingHandCursor)
@@ -75,37 +73,27 @@ class _HoverCloseTabBar(QTabBar):
         super().mouseMoveEvent(event)
 
     def leaveEvent(self, event):  # type: ignore[override]
-        # On leave, clear hover index but keep selected tab's close button visible
         self._hover_index = -1
-        self._update_close_button()
+        self._update_close_buttons()
         if self.cursor().shape() != Qt.ArrowCursor:
             self.setCursor(Qt.ArrowCursor)
         super().leaveEvent(event)
 
-    # --- helpers ---------------------------------------------------
-    def _update_close_button(self):
-        """Ensure correct tabs show active close buttons.
-
-        Rules:
-        - Selected tab's close button is always visible.
-        - Hovered tab also shows close button (even if not selected).
-        - All other tabs revert to placeholder to keep width stable.
-        """
+    # ---- core logic -------------------------------------------------------
+    def _update_close_buttons(self):
         self._ensure_all_placeholders()
-
         desired: set[int] = set()
-        current_index = self.currentIndex()
-        if 0 <= current_index < self.count():
-            desired.add(current_index)
+        current = self.currentIndex()
+        if 0 <= current < self.count():
+            desired.add(current)
         if 0 <= self._hover_index < self.count():
             desired.add(self._hover_index)
 
-        # Add close buttons where needed
+        # Add where needed
         for idx in desired:
             btn = self.tabButton(idx, QTabBar.RightSide)
             if isinstance(btn, QToolButton) and btn.isEnabled():
-                continue  # already active
-            # Replace placeholder with active close button
+                continue
             close_btn = QToolButton(self)
             close_btn.setAutoRaise(True)
             close_btn.setCursor(Qt.PointingHandCursor)
@@ -118,7 +106,7 @@ class _HoverCloseTabBar(QTabBar):
             else:
                 close_btn.setText('×')
             close_btn.setAccessibleName('Close')
-            close_btn.clicked.connect(self._handle_close_clicked)
+            close_btn.clicked.connect(lambda _=False, i=idx: self.tabCloseRequested.emit(i))
             close_btn.setStyleSheet(
                 "QToolButton { background: transparent; border:none; padding:0; margin:0; color:#cfd2d6; }"
                 "QToolButton:hover { background:#45484d; color:#ffffff; border-radius:3px; }"
@@ -126,38 +114,17 @@ class _HoverCloseTabBar(QTabBar):
             self.setTabButton(idx, QTabBar.RightSide, close_btn)
             self._active_close_indices.add(idx)
 
-        # Remove close buttons where no longer desired
+        # Remove where no longer desired
         for idx in list(self._active_close_indices):
-            if idx not in desired and 0 <= idx < self.count():
+            if idx not in desired:
                 btn = self.tabButton(idx, QTabBar.RightSide)
                 if isinstance(btn, QToolButton) and btn.isEnabled():
                     self._replace_with_placeholder(idx)
                 self._active_close_indices.discard(idx)
 
-    def _emit_close_current(self):
-        # Fallback (may be unused after refactor) – keep for safety if invoked
-        if 0 <= self._hover_index < self.count():
-            self.tabCloseRequested.emit(self._hover_index)
-
-    def _handle_close_clicked(self):  # Slot for close button clicks
-        sender = self.sender()
-        if sender is None:
-            return
-        # Find which tab currently contains this sender as its right-side button
-        for i in range(self.count()):
-            if self.tabButton(i, QTabBar.RightSide) is sender:
-                self.tabCloseRequested.emit(i)
-                return
-
 
 class TabbedEditor(QWidget):
-    """Simple tabbed text editor container.
-
-    - One QTextEdit per tab.
-    - Avoids duplicate tabs for same absolute path.
-    - Supports reordering with matching editor content.
-    - Close button always visible on the selected tab; appears on other tabs when hovered.
-    """
+    """Tabbed text editor container with custom close-button behavior."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -168,7 +135,7 @@ class TabbedEditor(QWidget):
 
         self._tab_bar = _HoverCloseTabBar(self)
         self._tab_bar.setMovable(True)
-        self._tab_bar.setTabsClosable(False)  # managed manually by hover buttons
+        self._tab_bar.setTabsClosable(False)
         self._tab_bar.setDocumentMode(True)
         self._tab_bar.setElideMode(Qt.ElideRight)
         self._tab_bar.setExpanding(False)
@@ -181,8 +148,7 @@ class TabbedEditor(QWidget):
         layout.addWidget(self._stack, 1)
 
         self._path_to_index = {}  # type: dict[str, int]
-        # Lazy import custom file icon machinery (shared with sidebar)
-        try:
+        try:  # icon registry shared with sidebar
             from .file_icons import file_icon_registry  # type: ignore
             from .file_icon_config import apply_file_icon_config  # type: ignore
             apply_file_icon_config()
@@ -192,30 +158,62 @@ class TabbedEditor(QWidget):
         self._editors = []  # type: list[QTextEdit]
 
         self._apply_style()
-        # Initialize placeholder/close button state
-        self._tab_bar._update_close_button()
+        self._tab_bar._update_close_buttons()
 
-    # --- styling ---------------------------------------------------
+    # ---- session persistence -------------------------------------------
+    def save_state(self) -> dict:
+        """Return serialisable state of open tabs.
+
+        Structure:
+        {
+            'tabs': [ absolute file paths in order ],
+            'current': int | None,
+        }
+        """
+        tabs: list[str] = []
+        for i in range(self._tab_bar.count()):
+            p = self._tab_bar.tabToolTip(i)
+            if p:
+                tabs.append(p)
+        cur = self._tab_bar.currentIndex()
+        return {"tabs": tabs, "current": cur if 0 <= cur < len(tabs) else None}
+
+    def restore_state(self, state: dict):
+        """Restore previously saved tab layout."""
+        if not isinstance(state, dict):
+            return
+        tabs = state.get("tabs", [])
+        if not isinstance(tabs, list):
+            return
+        current = state.get("current")
+        for p in tabs:
+            if isinstance(p, str) and Path(p).exists():
+                try:
+                    self.open_file(p)
+                except Exception:
+                    continue
+        if isinstance(current, int) and 0 <= current < self._tab_bar.count():
+            self._tab_bar.setCurrentIndex(current)
+            self._set_current_editor_by_tab()
+        self._tab_bar._update_close_buttons()
+
+    # ---- styling ---------------------------------------------------------
     def _apply_style(self):
         self._tab_bar.setStyleSheet(
             "QTabBar { background:#1f2123; }"
-            # Base tab style: square corners, no gaps, taller height
             "QTabBar::tab { background:#2a2c2f; color:#cfd2d6;"
             " padding:5px 10px 3px 10px; margin-right:0;"
             " border:1px solid #3a3d41; border-bottom:0;"
             " min-height:24px; min-width:70px; position:relative; }"
-            # Selected tab: blue top line, adjust top padding to compensate
             "QTabBar::tab:selected { background:#34373a; color:#ffffff; border-top:2px solid #2f80ed; padding-top:3px; }"
-            # Hover state
             "QTabBar::tab:hover { background:#323539; }"
-            # Thin visual separator between adjacent tabs via left border emphasis
             "QTabBar::tab + QTabBar::tab { border-left:1px solid #2d3033; }"
         )
         self._stack.setStyleSheet(
             "QTextEdit { background:#1f2123; color:#e3e5e8; border:none; padding:6px; }"
         )
 
-    # --- public API ------------------------------------------------
+    # ---- public API ------------------------------------------------------
     def open_file(self, path: str):
         norm = str(Path(path).resolve())
         if norm in self._path_to_index:
@@ -223,7 +221,7 @@ class TabbedEditor(QWidget):
             return
         try:
             text = Path(norm).read_text(encoding="utf-8", errors="replace")
-        except Exception as e:  # pragma: no cover - display fallback
+        except Exception as e:  # pragma: no cover
             text = f"<Unable to open file>\n{e}"
         editor = QTextEdit(self._stack)
         editor.setPlainText(text)
@@ -236,8 +234,7 @@ class TabbedEditor(QWidget):
         self._tab_bar.setTabToolTip(tab_index, norm)
         self._tab_bar.setCurrentIndex(tab_index)
         self._stack.setCurrentWidget(editor)
-        # Ensure close buttons reflect new selection
-        self._tab_bar._update_close_button()
+        self._tab_bar._update_close_buttons()
 
     def current_editor(self) -> QTextEdit | None:
         w = self._stack.currentWidget()
@@ -249,7 +246,7 @@ class TabbedEditor(QWidget):
             return None
         return self._tab_bar.tabToolTip(idx) or None
 
-    # --- internal slots --------------------------------------------
+    # ---- internal slots --------------------------------------------------
     def _close_index(self, index: int):
         if 0 <= index < len(self._editors):
             w = self._editors.pop(index)
@@ -261,20 +258,19 @@ class TabbedEditor(QWidget):
         if self._tab_bar.count() == 0:
             return
         self._set_current_editor_by_tab()
-        self._tab_bar._update_close_button()
+        self._tab_bar._update_close_buttons()
 
     def _on_tab_changed(self, index: int):
         if index < 0:
             return
         self._set_current_editor_by_tab()
-        self._tab_bar._update_close_button()
+        self._tab_bar._update_close_buttons()
 
     def _on_tab_moved(self, from_index: int, to_index: int):
         if from_index == to_index:
             return
         if 0 <= from_index < len(self._editors):
             editor = self._editors.pop(from_index)
-            # QTabBar already finalized the visual order; insert at to_index.
             if to_index < 0:
                 to_index = 0
             if to_index > len(self._editors):
@@ -282,9 +278,9 @@ class TabbedEditor(QWidget):
             self._editors.insert(to_index, editor)
         self._rebuild_mapping()
         self._set_current_editor_by_tab()
-        self._tab_bar._update_close_button()
+        self._tab_bar._update_close_buttons()
 
-    # --- mapping maintenance ---------------------------------------
+    # ---- mapping ---------------------------------------------------------
     def _rebuild_mapping(self):
         self._path_to_index.clear()
         for i in range(self._tab_bar.count()):
@@ -297,7 +293,7 @@ class TabbedEditor(QWidget):
         if 0 <= idx < len(self._editors):
             self._stack.setCurrentWidget(self._editors[idx])
 
-    # --- helpers ----------------------------------------------------
+    # ---- helpers ---------------------------------------------------------
     def _icon_for_file(self, path: str) -> QIcon:
         if self._file_icon_registry is not None:
             try:
@@ -308,3 +304,4 @@ class TabbedEditor(QWidget):
 
 
 __all__ = ["TabbedEditor"]
+

@@ -104,9 +104,13 @@ class TabbedEditor(QWidget):
             return
         if 0 <= from_index < len(self._editors):
             editor = self._editors.pop(from_index)
-            # adjust target index if after removal index shifts
-            if from_index < to_index:
-                to_index -= 1
+            # Insert at the target index reported by QTabBar (final position);
+            # no manual index adjustment is needed because QTabBar's 'to_index'
+            # reflects the post-move position. Adjusting caused desync.
+            if to_index < 0:
+                to_index = 0
+            if to_index > len(self._editors):
+                to_index = len(self._editors)
             self._editors.insert(to_index, editor)
         self._rebuild_mapping()
         self._set_current_editor_by_tab()

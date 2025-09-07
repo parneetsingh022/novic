@@ -206,6 +206,21 @@ class TitleBar(QWidget):
     # --- direct background dragging (outside menubar & buttons) ---
     def mousePressEvent(self, event):  # type: ignore
         if event.button() == Qt.LeftButton:
+            # Allow edge/corner press to start resize instead of move
+            win = self.window()
+            try:
+                margin = getattr(win, "_resize_margin", 6)
+                if getattr(win, "_resizable", True):
+                    pos = event.position().toPoint()
+                    # Near left/right/top edges inside the title bar: delegate to window for resize
+                    near_left = pos.x() <= margin
+                    near_right = pos.x() >= self.width() - margin
+                    near_top = pos.y() <= margin  # always small but keep for completeness
+                    if near_left or near_right or near_top:
+                        # forward to window's resize handler
+                        return win.mousePressEvent(event)  # type: ignore
+            except Exception:
+                pass
             child = self.childAt(event.position().toPoint())
             # Avoid intercepting clicks meant for buttons or menu bar
             interactive = {self.btn_min, self.btn_max, self.btn_close}
@@ -220,6 +235,28 @@ class TitleBar(QWidget):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):  # type: ignore
+        win = self.window()
+        # Show appropriate resize cursor when hovering edges in title bar
+        try:
+            if getattr(win, "_resizable", True) and not self._drag_pos and not (event.buttons() & Qt.LeftButton):
+                margin = getattr(win, "_resize_margin", 6)
+                pos = event.position().toPoint()
+                near_left = pos.x() <= margin
+                near_right = pos.x() >= self.width() - margin
+                # top edge (for diagonal cursors if near corners)
+                near_top = pos.y() <= margin
+                if (near_left and near_top):
+                    self.setCursor(Qt.SizeFDiagCursor)
+                elif (near_right and near_top):
+                    self.setCursor(Qt.SizeBDiagCursor)
+                elif near_left:
+                    self.setCursor(Qt.SizeHorCursor)
+                elif near_right:
+                    self.setCursor(Qt.SizeHorCursor)
+                else:
+                    self.setCursor(Qt.ArrowCursor)
+        except Exception:
+            pass
         if self._drag_pos and (event.buttons() & Qt.LeftButton):
             diff = event.globalPosition().toPoint() - self._drag_pos
             self.window().move(self.window().pos() + diff)

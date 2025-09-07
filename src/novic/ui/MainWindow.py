@@ -13,8 +13,8 @@ from novic.ui.frameless import FramelessWindow
 
 class MainWindow(FramelessWindow):
     def __init__(self):
-        # Non-resizable and hide menu bar per request (menu still built for About action trigger)
-        super().__init__(title="Novic", size=(900, 600), resizable=False, show_menu=True)
+        # Window now resizable; user can drag edges/corners (frameless custom logic)
+        super().__init__(title="Novic", size=(900, 600), resizable=True, show_menu=True)
         self._register_default_menus()
         self._build_body()
         # restore previous session after UI widgets built

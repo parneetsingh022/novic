@@ -1,8 +1,9 @@
 from __future__ import annotations
 from pathlib import Path
-from PySide6.QtCore import Qt, QSize, QDir, Signal, QMimeData, QUrl
-from PySide6.QtGui import QIcon, QDrag, QPainter, QColor, QPixmap, QFont, QPen, QFontMetrics
+from PySide6.QtCore import Qt, QSize, QDir, Signal, QMimeData, QUrl, QTimer
+from PySide6.QtGui import QIcon, QDrag, QPainter, QColor, QPixmap, QFont, QPen, QFontMetrics, QAction
 from PySide6.QtWidgets import QStyledItemDelegate, QStyleOptionViewItem
+from PySide6.QtWidgets import QMenu, QInputDialog, QMessageBox
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QToolButton, QStackedWidget, QLabel,
     QFileSystemModel, QTreeView, QFileIconProvider, QSizePolicy, QFrame,
@@ -28,6 +29,11 @@ class _FileTreeView(QTreeView):
         self.setDropIndicatorShown(True)
         self.setDragDropMode(QAbstractItemView.DragDrop)
         self._hover_index = None  # type: ignore
+        self.setContextMenuPolicy(Qt.DefaultContextMenu)
+        self.setEditTriggers(
+            QAbstractItemView.EditKeyPressed |
+            QAbstractItemView.SelectedClicked
+        )
 
         class _HoverDelegate(QStyledItemDelegate):
             def __init__(self, view: '_FileTreeView'):
@@ -36,15 +42,255 @@ class _FileTreeView(QTreeView):
                 self._color = QColor('#2f4254')  # subtle highlight
 
             def paint(self, painter: QPainter, option: QStyleOptionViewItem, index):  # type: ignore
-                # If this index is the hover target (folder), tint background
                 if self._view._hover_index is not None and index == self._view._hover_index:
                     painter.save()
-                    c = self._color
-                    painter.fillRect(option.rect, c)
+                    painter.fillRect(option.rect, self._color)
                     painter.restore()
                 super().paint(painter, option, index)
 
         self.setItemDelegate(_HoverDelegate(self))
+
+    # --- context menu -------------------------------------------------------
+    def contextMenuEvent(self, event):  # type: ignore
+        root_path = self._sidebar._current_root_path
+        if not root_path:
+            return
+        pos = event.pos()
+        idx = self.indexAt(pos)
+        model: QFileSystemModel = self.model()  # type: ignore[assignment]
+        clicked_path = None
+        is_dir = False
+        if idx.isValid():
+            clicked_path = model.filePath(idx)
+            is_dir = model.isDir(idx)
+            # ensure selection reflects right-clicked item if not already multi-select including it
+            if idx not in self.selectedIndexes():
+                self.selectionModel().select(idx, self.selectionModel().Clear | self.selectionModel().Select | self.selectionModel().Rows)
+        selected_paths = []
+        for sidx in self.selectedIndexes():
+            if sidx.column() != 0:
+                continue
+            try:
+                p = model.filePath(sidx)
+            except Exception:
+                p = None
+            if p:
+                selected_paths.append(p)
+        menu = QMenu(self)
+
+        def _refresh():
+            try:
+                current = model.rootPath()
+                model.setRootPath("")
+                model.setRootPath(current)
+            except Exception:
+                pass
+
+        # Helpers
+        def _target_directory():
+            # Directory where new file/folder or paste should land
+            if clicked_path and is_dir:
+                return clicked_path
+            if clicked_path and not is_dir:
+                return os.path.dirname(clicked_path)
+            return root_path
+
+        # New Folder
+        if is_dir or not clicked_path:  # allow when right-clicking folder or empty area
+            act_new_folder = QAction("New Folder", menu)
+            def _new_folder():
+                base_dir = _target_directory()
+                base_name = "New Folder"
+                candidate = base_name
+                i = 1
+                while os.path.exists(os.path.join(base_dir, candidate)):
+                    candidate = f"{base_name} {i}"
+                    i += 1
+                path = os.path.join(base_dir, candidate)
+                try:
+                    os.makedirs(path)
+                except Exception:
+                    return
+                # ensure parent expanded then edit the new folder name inline
+                parent_idx = model.index(base_dir)
+                if parent_idx.isValid():
+                    self.expand(parent_idx)
+                def _try_edit(attempt=0):
+                    idx_new = model.index(path)
+                    if idx_new.isValid():
+                        self.setCurrentIndex(idx_new)
+                        self.edit(idx_new)
+                    elif attempt < 10:
+                        QTimer.singleShot(50, lambda: _try_edit(attempt+1))
+                QTimer.singleShot(0, _try_edit)
+            act_new_folder.triggered.connect(_new_folder)
+            menu.addAction(act_new_folder)
+
+        # New File
+        if is_dir or not clicked_path:
+            act_new_file = QAction("New File", menu)
+            def _new_file():
+                base_dir = _target_directory()
+                base_name = "New File"
+                candidate = base_name
+                i = 1
+                while os.path.exists(os.path.join(base_dir, candidate)):
+                    candidate = f"{base_name} {i}"
+                    i += 1
+                path = os.path.join(base_dir, candidate)
+                try:
+                    with open(path, 'w', encoding='utf-8'):
+                        pass
+                except Exception:
+                    return
+                parent_idx = model.index(base_dir)
+                if parent_idx.isValid():
+                    self.expand(parent_idx)
+                def _try_edit(attempt=0):
+                    idx_new = model.index(path)
+                    if idx_new.isValid():
+                        self.setCurrentIndex(idx_new)
+                        self.edit(idx_new)
+                    elif attempt < 10:
+                        QTimer.singleShot(50, lambda: _try_edit(attempt+1))
+                QTimer.singleShot(0, _try_edit)
+            act_new_file.triggered.connect(_new_file)
+            menu.addAction(act_new_file)
+
+        if menu.actions():
+            menu.addSeparator()
+
+        # Rename
+        if len(selected_paths) == 1:
+            act_rename = QAction("Rename", menu)
+            def _rename():
+                target_idx = None
+                for sidx in self.selectedIndexes():
+                    if sidx.column() == 0:
+                        target_idx = sidx
+                        break
+                if not target_idx:
+                    return
+                def _attempt(attempt=0):
+                    self.setCurrentIndex(target_idx)
+                    started = self.edit(target_idx)
+                    if (not started) and attempt < 8:
+                        QTimer.singleShot(40, lambda: _attempt(attempt+1))
+                QTimer.singleShot(0, _attempt)
+            act_rename.triggered.connect(_rename)
+            menu.addAction(act_rename)
+
+        # Delete
+        if selected_paths:
+            act_delete = QAction("Delete", menu)
+            def _delete():
+                if QMessageBox.question(self, "Delete", f"Delete {len(selected_paths)} item(s)?", QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+                    return
+                for p in selected_paths:
+                    try:
+                        if os.path.isdir(p):
+                            shutil.rmtree(p)
+                        else:
+                            os.remove(p)
+                    except Exception:
+                        pass
+                _refresh()
+            act_delete.triggered.connect(_delete)
+            menu.addAction(act_delete)
+
+        # Cut / Copy
+        if selected_paths:
+            act_cut = QAction("Cut", menu)
+            act_copy = QAction("Copy", menu)
+            def _cut():
+                self._sidebar._clipboard_paths = selected_paths[:]  # type: ignore[attr-defined]
+                self._sidebar._clipboard_mode = 'cut'  # type: ignore[attr-defined]
+            def _copy():
+                self._sidebar._clipboard_paths = selected_paths[:]  # type: ignore[attr-defined]
+                self._sidebar._clipboard_mode = 'copy'  # type: ignore[attr-defined]
+            act_cut.triggered.connect(_cut)
+            act_copy.triggered.connect(_copy)
+            menu.addAction(act_cut)
+            menu.addAction(act_copy)
+
+        # Paste
+        if getattr(self._sidebar, '_clipboard_paths', None):
+            act_paste = QAction("Paste", menu)
+            def _paste():
+                dest_dir = _target_directory()
+                paths = getattr(self._sidebar, '_clipboard_paths', [])
+                mode = getattr(self._sidebar, '_clipboard_mode', None)
+                any_changed = False
+                for src in paths:
+                    if not os.path.exists(src):
+                        continue
+                    base = os.path.basename(src)
+                    dest = os.path.join(dest_dir, base)
+                    # auto-rename if exists for copy, skip for cut
+                    if os.path.exists(dest):
+                        if mode == 'cut':
+                            continue
+                        i = 1
+                        name, ext = os.path.splitext(base)
+                        while True:
+                            candidate = f"{name}_{i}{ext}"
+                            cpath = os.path.join(dest_dir, candidate)
+                            if not os.path.exists(cpath):
+                                dest = cpath
+                                break
+                            i += 1
+                    try:
+                        if mode == 'cut':
+                            shutil.move(src, dest)
+                            any_changed = True
+                        elif mode == 'copy':
+                            if os.path.isdir(src):
+                                shutil.copytree(src, dest)
+                            else:
+                                shutil.copy2(src, dest)
+                            any_changed = True
+                    except Exception:
+                        pass
+                if mode == 'cut':
+                    # Clear clipboard after move
+                    self._sidebar._clipboard_paths = []  # type: ignore[attr-defined]
+                    self._sidebar._clipboard_mode = None  # type: ignore[attr-defined]
+                if any_changed:
+                    _refresh()
+            act_paste.triggered.connect(_paste)
+            menu.addAction(act_paste)
+
+        # Copy Path
+        if selected_paths:
+            act_copy_path = QAction("Copy Path", menu)
+            def _copy_path():
+                try:
+                    from PySide6.QtGui import QGuiApplication
+                    clip = QGuiApplication.clipboard()
+                    clip.setText('\n'.join(selected_paths))
+                except Exception:
+                    pass
+            act_copy_path.triggered.connect(_copy_path)
+            menu.addAction(act_copy_path)
+
+        # Open in Explorer
+        if len(selected_paths) == 1:
+            act_open_explorer = QAction("Open in Explorer", menu)
+            def _open_explorer():
+                target = selected_paths[0]
+                try:
+                    if os.path.isdir(target):
+                        os.startfile(target)  # type: ignore[attr-defined]
+                    else:
+                        os.startfile(os.path.dirname(target))  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+            act_open_explorer.triggered.connect(_open_explorer)
+            menu.addAction(act_open_explorer)
+
+        if not menu.actions():
+            return
+        menu.exec(self.viewport().mapToGlobal(pos))
 
     # Provide URLs for dragging out to OS / other apps
     def startDrag(self, supportedActions):  # type: ignore
@@ -335,6 +581,10 @@ class ActivitySidebar(QWidget):
         # Filesystem model (lazy root)
         self._fs_model = QFileSystemModel(self)
         try:
+            self._fs_model.setReadOnly(False)
+        except Exception:
+            pass
+        try:
             from .file_icons import FileIconProvider, file_icon_registry  # type: ignore
             from .file_icon_config import apply_file_icon_config  # type: ignore
             apply_file_icon_config()
@@ -433,6 +683,9 @@ class ActivitySidebar(QWidget):
 
         self._explorer_btn.clicked.connect(lambda: self._activate(self._explorer_btn, 0))
         self._settings_btn.clicked.connect(lambda: self._activate(self._settings_btn, 1))
+        # clipboard (cut/copy) store
+        self._clipboard_paths = []  # type: ignore[assignment]
+        self._clipboard_mode = None  # type: ignore[assignment]
 
     # --- internal helpers ----------------------------------------------------
     def _move_indicator(self, btn):

@@ -8,7 +8,7 @@ from PySide6.QtCore import QDir, QSize, Qt, QObject, QEvent
 from novic.core.menu_framework import MenuDefinition, MenuAction
 from .sidebar import ActivitySidebar
 from .footer import StatusFooter
-from .code_editor import CodeEditor
+from .tabbed_editor import TabbedEditor
 from novic.ui.frameless import FramelessWindow
 
 class MainWindow(FramelessWindow):
@@ -37,6 +37,13 @@ class MainWindow(FramelessWindow):
         ])
         help_menu = MenuDefinition(title="Help", actions=[
             MenuAction("About Novic", self._about_dialog),
+            MenuAction.separator(),
+            MenuAction("View Logs", self._help_view_logs),
+            MenuAction("Open Documentation", self._help_open_docs),
+            MenuAction("Check for Updates", self._help_check_updates),
+            MenuAction("Report Issue", self._help_report_issue),
+            MenuAction.separator(),
+            MenuAction("Keyboard Shortcuts", self._help_shortcuts, shortcut="Ctrl+K"),
         ])
         self.menu_registry.clear()
         self.menu_registry.add_menu(file_menu).add_menu(edit_menu).add_menu(help_menu)
@@ -47,7 +54,6 @@ class MainWindow(FramelessWindow):
         body_layout = QVBoxLayout(body)
         body_layout.setContentsMargins(0,0,0,0)
         body_layout.setSpacing(0)
-
         splitter = QSplitter(Qt.Horizontal, body)
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(2)
@@ -55,13 +61,15 @@ class MainWindow(FramelessWindow):
         # Sidebar component
         self.sidebar = ActivitySidebar(splitter)
         splitter.addWidget(self.sidebar)
-
-        # Editor component
-        self.editor = CodeEditor(splitter)
-        splitter.addWidget(self.editor)
+        # Tabbed editor component
+        self.editors = TabbedEditor(splitter)
+        splitter.addWidget(self.editors)
         splitter.setStretchFactor(0,0)
         splitter.setStretchFactor(1,1)
         splitter.setSizes([260, max(300, self.width()-260)])
+
+        # Wire file activation from sidebar
+        self.sidebar.fileActivated.connect(self._open_file_from_sidebar)
 
         # Hook sidebar show/hide to adjust splitter handle
         self._orig_handle_width = splitter.handleWidth()
@@ -97,9 +105,50 @@ class MainWindow(FramelessWindow):
         # TODO: implement save-as logic
         pass
 
+    # --- help handlers ----------------------------------------------------
+    def _help_view_logs(self):
+        from PySide6.QtWidgets import QMessageBox
+        QMessageBox.information(self, "Logs", "Log viewer not implemented yet.")
+
+    def _help_open_docs(self):
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+        QDesktopServices.openUrl(QUrl("https://example.com/novic/docs"))
+
+    def _help_check_updates(self):
+        from PySide6.QtWidgets import QMessageBox
+        QMessageBox.information(self, "Updates", "You're on the latest version (stub).")
+
+    def _help_report_issue(self):
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+        QDesktopServices.openUrl(QUrl("https://example.com/novic/issues"))
+
+    def _help_shortcuts(self):
+        from PySide6.QtWidgets import QMessageBox
+        shortcuts = (
+            "Ctrl+S  Save\n"
+            "Ctrl+Shift+S  Save As\n"
+            "Ctrl+Z  Undo\n"
+            "Ctrl+Y  Redo\n"
+            "Ctrl+X  Cut\n"
+            "Ctrl+C  Copy\n"
+            "Ctrl+V  Paste\n"
+            "Ctrl+A  Select All\n"
+        )
+        QMessageBox.information(self, "Keyboard Shortcuts", shortcuts)
+
+    # --- file opening ------------------------------------------------------
+    def _open_file_from_sidebar(self, path: str):
+        if hasattr(self, 'editors'):
+            self.editors.open_file(path)
+
     # --- edit actions (safe even if editor not yet built) -----------------
     def _editor(self):
-        return getattr(self, 'editor', None)
+        # return active QTextEdit within tabbed editor
+        if hasattr(self, 'editors') and self.editors is not None:
+            return self.editors.current_editor()
+        return None
 
     def _edit_undo(self):
         e = self._editor();  e and e.undo()

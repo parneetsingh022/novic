@@ -1,21 +1,26 @@
 from __future__ import annotations
 from pathlib import Path
-from PySide6.QtCore import Qt, QSize, QDir, QEvent, QObject, Signal
+from PySide6.QtCore import Qt, QSize, QDir, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QToolButton, QStackedWidget, QLabel,
-    QFileSystemModel, QTreeView, QFileIconProvider, QSizePolicy, QFrame
+    QFileSystemModel, QTreeView, QFileIconProvider, QSizePolicy, QFrame,
+    QPushButton, QFileDialog
 )
 
-class ActivitySidebar(QWidget):
-    """Composite widget: activity icon bar + stacked panels (Explorer, Settings).
 
-    Emits panelShown/panelHidden when the explorer/settings stack visibility toggles.
-    The containing window is responsible for splitter size adjustments.
+class ActivitySidebar(QWidget):
+    """Activity bar + explorer/settings panels.
+
+    Starts with an empty explorer showing a button to open a folder. Only after
+    a folder is chosen is the tree view displayed.
     """
+
     panelShown = Signal()
     panelHidden = Signal()
     currentPanelChanged = Signal(int)
+    folderOpened = Signal(str)
+    fileActivated = Signal(str)  # emitted with absolute file path when a file is clicked
 
     ICON_BAR_WIDTH = 56
 
@@ -25,7 +30,7 @@ class ActivitySidebar(QWidget):
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
-        # Icon bar
+        # --- Activity icon bar -------------------------------------------------
         self._nav_bar = QWidget(self)
         self._nav_bar.setFixedWidth(self.ICON_BAR_WIDTH)
         self._nav_bar.setStyleSheet("background:#1d1f21;")
@@ -69,7 +74,7 @@ class ActivitySidebar(QWidget):
 
         buttons_container = QWidget(self._nav_bar)
         bc_layout = QVBoxLayout(buttons_container)
-        bc_layout.setContentsMargins(0,0,0,0)
+        bc_layout.setContentsMargins(0, 0, 0, 0)
         bc_layout.setSpacing(4)
         bc_layout.addWidget(self._explorer_btn)
         bc_layout.addWidget(self._settings_btn)
@@ -77,26 +82,26 @@ class ActivitySidebar(QWidget):
         nav_layout.addWidget(buttons_container)
         nav_layout.addStretch()
 
-        # Indicator
+        # Selection indicator
         self._indicator = QFrame(buttons_container)
         self._indicator.setFixedWidth(4)
         self._indicator.setStyleSheet("background:#2680ff; border:none; border-radius:2px;")
         self._indicator.hide()
 
-        # Stacked panels
+        # --- Panels ------------------------------------------------------------
         self._stack = QStackedWidget(self)
         self._stack.setStyleSheet("background:#242629;")
 
-        # Explorer panel
+        # Explorer page
         explorer_page = QWidget()
         exp_layout = QVBoxLayout(explorer_page)
-        exp_layout.setContentsMargins(0,0,0,0)
+        exp_layout.setContentsMargins(0, 0, 0, 0)
         exp_layout.setSpacing(0)
         header = QWidget(explorer_page)
         header.setFixedHeight(24)
         header.setStyleSheet("background:#242629; border:none;")
         hl = QHBoxLayout(header)
-        hl.setContentsMargins(8,0,4,0)
+        hl.setContentsMargins(8, 0, 4, 0)
         hl.setSpacing(0)
         title_lbl = QLabel("Explorer", header)
         title_lbl.setStyleSheet("color:#cfd2d6; font-weight:bold; font-size:11px;")
@@ -104,6 +109,7 @@ class ActivitySidebar(QWidget):
         hl.addStretch()
         exp_layout.addWidget(header)
 
+        # Filesystem model (lazy root)
         self._fs_model = QFileSystemModel(self)
         try:
             from .file_icons import FileIconProvider, file_icon_registry  # type: ignore
@@ -115,22 +121,44 @@ class ActivitySidebar(QWidget):
                 def icon(self, *_):
                     return QIcon()
             self._fs_model.setIconProvider(_EmptyIconProvider())
-        self._fs_model.setRootPath(QDir.currentPath())
         self._fs_model.setFilter(QDir.AllDirs | QDir.NoDotAndDotDot | QDir.Files)
 
-        tree = QTreeView(explorer_page)
-        tree.setModel(self._fs_model)
-        tree.setRootIndex(self._fs_model.index(QDir.currentPath()))
-        tree.setHeaderHidden(True)
-        for c in range(1, self._fs_model.columnCount()):
-            tree.setColumnHidden(c, True)
-        tree.setIndentation(14)
-        tree.setAnimated(True)
-        tree.setIconSize(QSize(14,14))
+        # Placeholder before a folder is opened
+        self._placeholder = QWidget(explorer_page)
+        ph_layout = QVBoxLayout(self._placeholder)
+        ph_layout.setContentsMargins(20, 30, 20, 20)
+        ph_layout.setSpacing(14)
+        msg = QLabel("No folder opened", self._placeholder)
+        msg.setStyleSheet("color:#cfd2d6; font-size:13px; font-weight:bold;")
+        sub = QLabel("Click the button below to choose a folder to explore.", self._placeholder)
+        sub.setStyleSheet("color:#9ca2a8; font-size:11px;")
+        sub.setWordWrap(True)
+        open_btn = QPushButton("Open Folder...", self._placeholder)
+        open_btn.setCursor(Qt.PointingHandCursor)
+        open_btn.setStyleSheet(
+            "QPushButton { background:#2f3235; border:1px solid #3a3d41; color:#e3e5e8; padding:6px 14px; border-radius:4px; }"
+            "QPushButton:hover { background:#3a3d41; }"
+            "QPushButton:pressed { background:#45484c; }"
+        )
+        ph_layout.addWidget(msg)
+        ph_layout.addWidget(sub)
+        ph_layout.addSpacing(4)
+        ph_layout.addWidget(open_btn, 0, Qt.AlignLeft)
+        ph_layout.addStretch()
+        exp_layout.addWidget(self._placeholder)
+
+        # Tree view (hidden initially)
+        self._tree = QTreeView(explorer_page)
+        self._tree.hide()
+        self._tree.setModel(self._fs_model)
+        self._tree.setHeaderHidden(True)
+        self._tree.setIndentation(14)
+        self._tree.setAnimated(True)
+        self._tree.setIconSize(QSize(14, 14))
         resources_dir = Path(__file__).resolve().parent.parent / "resources" / "icons"
         chevron_right = (resources_dir / "chevron_right.svg").as_posix()
         chevron_down = (resources_dir / "chevron_down.svg").as_posix()
-        tree.setStyleSheet(
+        self._tree.setStyleSheet(
             "QTreeView { background:#242629; color:#e3e5e8; border:none; outline:0; padding-left:5px; }"
             "QTreeView::viewport { margin-left:5px; }"
             "QTreeView::item { padding-left:2px; }"
@@ -139,33 +167,41 @@ class ActivitySidebar(QWidget):
             f"QTreeView::branch:has-children:!has-siblings:closed,QTreeView::branch:closed:has-children {{ image: url({chevron_right}); }}"
             f"QTreeView::branch:open:has-children:!has-siblings,QTreeView::branch:open:has-children {{ image: url({chevron_down}); }}"
         )
-        tree.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        # single-click expand/collapse
+        self._tree.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        exp_layout.addWidget(self._tree)
+
         def _toggle(idx):
             if self._fs_model.isDir(idx):
-                if tree.isExpanded(idx):
-                    tree.collapse(idx)
+                if self._tree.isExpanded(idx):
+                    self._tree.collapse(idx)
                 else:
-                    tree.expand(idx)
-        tree.clicked.connect(_toggle)
-        exp_layout.addWidget(tree)
+                    self._tree.expand(idx)
+            else:
+                # open file
+                path = self._fs_model.filePath(idx)
+                if path:
+                    self.fileActivated.emit(path)
+        self._tree.clicked.connect(_toggle)
+        open_btn.clicked.connect(self.open_folder)
+        self._folder_loaded = False
 
-        # Settings placeholder
+        # Settings page (placeholder)
         settings_page = QWidget()
         sl = QVBoxLayout(settings_page)
-        sl.setContentsMargins(8,8,8,8)
+        sl.setContentsMargins(8, 8, 8, 8)
         sl.setSpacing(4)
         ph = QLabel("Settings panel (placeholder)", settings_page)
         ph.setStyleSheet("color:#cfd2d6; font-size:12px;")
         sl.addWidget(ph)
         sl.addStretch()
 
-        self._stack.addWidget(explorer_page)  # 0
-        self._stack.addWidget(settings_page)  # 1
+        self._stack.addWidget(explorer_page)   # index 0
+        self._stack.addWidget(settings_page)   # index 1
 
         root_layout.addWidget(self._nav_bar, 0)
         root_layout.addWidget(self._stack, 1)
 
+        # Initial state
         self._panel_visible = True
         self._active_btn = self._explorer_btn
         self._move_indicator(self._explorer_btn)
@@ -173,7 +209,7 @@ class ActivitySidebar(QWidget):
         self._explorer_btn.clicked.connect(lambda: self._activate(self._explorer_btn, 0))
         self._settings_btn.clicked.connect(lambda: self._activate(self._settings_btn, 1))
 
-    # --- internal helpers ---
+    # --- internal helpers ----------------------------------------------------
     def _move_indicator(self, btn):
         self._indicator.setFixedHeight(btn.height())
         self._indicator.move(0, btn.y())
@@ -203,7 +239,7 @@ class ActivitySidebar(QWidget):
             self._move_indicator(btn)
         self.currentPanelChanged.emit(idx)
 
-    # --- public API ---
+    # --- public API ----------------------------------------------------------
     def is_panel_visible(self) -> bool:
         return self._panel_visible
 
@@ -217,5 +253,20 @@ class ActivitySidebar(QWidget):
         if not self._panel_visible:
             self._activate(self._explorer_btn if self._active_btn is None else self._active_btn,
                            self._stack.currentIndex())
+
+    # --- folder handling -----------------------------------------------------
+    def open_folder(self):
+        path = QFileDialog.getExistingDirectory(self, "Open Folder", QDir.homePath())
+        if not path:
+            return
+        idx = self._fs_model.setRootPath(path)
+        self._tree.setRootIndex(idx)
+        for c in range(1, self._fs_model.columnCount()):  # hide extra columns
+            self._tree.setColumnHidden(c, True)
+        self._placeholder.hide()
+        self._tree.show()
+        self._folder_loaded = True
+        self.folderOpened.emit(path)
+
 
 __all__ = ["ActivitySidebar"]

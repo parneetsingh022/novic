@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
     QTabBar,
     QStackedWidget,
     QTextEdit,
-    QFileIconProvider,
     QToolButton,
     QStyle,
 )
@@ -156,7 +155,14 @@ class TabbedEditor(QWidget):
         layout.addWidget(self._stack, 1)
 
         self._path_to_index: dict[str, int] = {}
-        self._icon_provider = QFileIconProvider()
+        # Lazy import custom file icon machinery (shared with sidebar)
+        try:
+            from .file_icons import file_icon_registry  # type: ignore
+            from .file_icon_config import apply_file_icon_config  # type: ignore
+            apply_file_icon_config()
+            self._file_icon_registry = file_icon_registry
+        except Exception:
+            self._file_icon_registry = None
         self._editors: list[QTextEdit] = []
 
         self._apply_style()
@@ -254,13 +260,11 @@ class TabbedEditor(QWidget):
 
     # --- helpers ----------------------------------------------------
     def _icon_for_file(self, path: str) -> QIcon:
-        try:
-            fi = QFileInfo(path)
-            icon = self._icon_provider.icon(fi)
-            if not icon.isNull():
-                return icon
-        except Exception:  # pragma: no cover
-            pass
+        if self._file_icon_registry is not None:
+            try:
+                return self._file_icon_registry.icon_for(Path(path))  # type: ignore[attr-defined]
+            except Exception:
+                return QIcon()
         return QIcon()
 
 

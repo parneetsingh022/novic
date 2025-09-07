@@ -1,12 +1,234 @@
 from __future__ import annotations
 from pathlib import Path
-from PySide6.QtCore import Qt, QSize, QDir, Signal
-from PySide6.QtGui import QIcon
+from PySide6.QtCore import Qt, QSize, QDir, Signal, QMimeData, QUrl
+from PySide6.QtGui import QIcon, QDrag, QPainter, QColor, QPixmap, QFont, QPen, QFontMetrics
+from PySide6.QtWidgets import QStyledItemDelegate, QStyleOptionViewItem
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QToolButton, QStackedWidget, QLabel,
     QFileSystemModel, QTreeView, QFileIconProvider, QSizePolicy, QFrame,
-    QPushButton, QFileDialog
+    QPushButton, QFileDialog, QAbstractItemView
 )
+import shutil
+import os
+
+
+class _FileTreeView(QTreeView):
+    """Custom tree view to support drag & drop of filesystem items.
+
+    Features:
+    - Internal move (within opened root) via drag & drop.
+    - External drop (files/folders from OS) copies into target directory.
+    - External drag (to OS) provides file URLs.
+    """
+    def __init__(self, parent_sidebar: 'ActivitySidebar', *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._sidebar = parent_sidebar
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QAbstractItemView.DragDrop)
+        self._hover_index = None  # type: ignore
+
+        class _HoverDelegate(QStyledItemDelegate):
+            def __init__(self, view: '_FileTreeView'):
+                super().__init__(view)
+                self._view = view
+                self._color = QColor('#2f4254')  # subtle highlight
+
+            def paint(self, painter: QPainter, option: QStyleOptionViewItem, index):  # type: ignore
+                # If this index is the hover target (folder), tint background
+                if self._view._hover_index is not None and index == self._view._hover_index:
+                    painter.save()
+                    c = self._color
+                    painter.fillRect(option.rect, c)
+                    painter.restore()
+                super().paint(painter, option, index)
+
+        self.setItemDelegate(_HoverDelegate(self))
+
+    # Provide URLs for dragging out to OS / other apps
+    def startDrag(self, supportedActions):  # type: ignore
+        idxs = self.selectedIndexes()
+        if not idxs:
+            return super().startDrag(supportedActions)
+        paths = []
+        primary_indexes = []  # only column 0 indexes used for icon composition
+        model = self.model()
+        for idx in idxs:
+            if idx.column() != 0:
+                continue
+            try:
+                p = model.filePath(idx)  # type: ignore[attr-defined]
+            except Exception:
+                p = None
+            if p:
+                paths.append(p)
+                primary_indexes.append(idx)
+        if not paths:
+            return super().startDrag(supportedActions)
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(p) for p in paths])
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+
+        # --- Build a drag pixmap so user sees a visual representation ---------
+        try:
+            padding_x = 10
+            padding_y = 6
+            radius = 8
+            font = QFont()
+            font.setPointSize(9)
+            fm = QFontMetrics(font)
+            if len(primary_indexes) == 1:
+                label = Path(paths[0]).name
+            else:
+                count = len(primary_indexes)
+                first_name = Path(paths[0]).name
+                label = f"{first_name} (+{count-1} more)" if count > 1 else first_name
+            text_w = fm.horizontalAdvance(label)
+            text_h = fm.height()
+            pix = QPixmap(text_w + padding_x * 2, text_h + padding_y * 2)
+            pix.fill(Qt.transparent)
+            painter = QPainter(pix)
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            # Semi-transparent blue background
+            bg = QColor(38, 128, 255, 150)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(bg)
+            painter.drawRoundedRect(0, 0, pix.width(), pix.height(), radius, radius)
+            painter.setFont(font)
+            painter.setPen(QColor('#ffffff'))
+            painter.drawText(padding_x, padding_y + fm.ascent(), fm.elidedText(label, Qt.ElideMiddle, text_w))
+            painter.end()
+            drag.setPixmap(pix)
+            drag.setHotSpot(pix.rect().topLeft())
+        except Exception:
+            pass
+        drag.exec(Qt.MoveAction | Qt.CopyAction, Qt.MoveAction)
+
+    # Accept external drags
+    def dragEnterEvent(self, event):  # type: ignore
+        if event.mimeData().hasUrls() or event.source() is self:
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):  # type: ignore
+        if event.mimeData().hasUrls() or event.source() is self:
+            pos = event.position().toPoint()
+            idx = self.indexAt(pos)
+            model = None
+            try:
+                model = self.model()
+            except Exception:
+                pass
+            target_idx = None
+            if idx.isValid() and model is not None:
+                try:
+                    if model.isDir(idx):  # type: ignore[attr-defined]
+                        target_idx = idx
+                    else:
+                        # use parent folder for files
+                        p = idx.parent()
+                        if p.isValid():
+                            target_idx = p
+                except Exception:
+                    pass
+            # Only update/repaint if changed
+            if target_idx != getattr(self, '_hover_index', None):
+                self._hover_index = target_idx  # type: ignore
+                self.viewport().update()
+            event.acceptProposedAction()
+        else:
+            # clear hover if leaving acceptable region
+            if self._hover_index is not None:
+                self._hover_index = None
+                self.viewport().update()
+            super().dragMoveEvent(event)
+
+    def dragLeaveEvent(self, event):  # type: ignore
+        if self._hover_index is not None:
+            self._hover_index = None
+            self.viewport().update()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event):  # type: ignore
+        model: QFileSystemModel = self.model()  # type: ignore[assignment]
+        sidebar = self._sidebar
+        root = sidebar._current_root_path
+        if not root:
+            return
+        target_dir = None
+        idx = self.indexAt(event.position().toPoint())
+        if idx.isValid():
+            p = model.filePath(idx)
+            if model.isDir(idx):
+                target_dir = p
+            else:
+                target_dir = os.path.dirname(p)
+        if not target_dir:
+            target_dir = root
+        target_dir = os.path.abspath(target_dir)
+        changed = False
+        if event.mimeData().hasUrls():
+            root_abs = os.path.abspath(root)
+            for url in event.mimeData().urls():
+                src = url.toLocalFile()
+                if not src:
+                    continue
+                src_abs = os.path.abspath(src)
+                # Internal if common root path equals project root
+                try:
+                    internal = os.path.commonpath([src_abs, root_abs]) == root_abs
+                except Exception:
+                    internal = False
+                base_name = os.path.basename(src_abs)
+                dest = os.path.join(target_dir, base_name)
+                # Prevent dropping into itself or descendant
+                try:
+                    if os.path.isdir(src_abs) and os.path.commonpath([src_abs, target_dir]) == src_abs:
+                        continue
+                except Exception:
+                    pass
+                if internal:
+                    if os.path.normcase(src_abs) == os.path.normcase(dest) or os.path.exists(dest):
+                        continue
+                    # Attempt atomic rename first
+                    try:
+                        os.rename(src_abs, dest)
+                        changed = True
+                    except Exception:
+                        try:
+                            shutil.move(src_abs, dest)
+                            changed = True
+                        except Exception:
+                            pass
+                else:
+                    if os.path.exists(dest):
+                        continue
+                    try:
+                        if os.path.isdir(src_abs):
+                            shutil.copytree(src_abs, dest)
+                        else:
+                            shutil.copy2(src_abs, dest)
+                        changed = True
+                    except Exception:
+                        pass
+            # Internal drag should be Move action
+            event.setDropAction(Qt.MoveAction)
+        if changed:
+            try:
+                current = model.rootPath()
+                model.setRootPath("")
+                model.setRootPath(current)
+            except Exception:
+                pass
+        # clear hover highlight after drop
+        if self._hover_index is not None:
+            self._hover_index = None
+            self.viewport().update()
+        event.accept()
+
 
 
 class ActivitySidebar(QWidget):
@@ -149,7 +371,7 @@ class ActivitySidebar(QWidget):
         exp_layout.addWidget(self._placeholder)
 
         # Tree view (hidden initially)
-        self._tree = QTreeView(explorer_page)
+        self._tree = _FileTreeView(self, explorer_page)
         self._tree.hide()
         self._tree.setModel(self._fs_model)
         self._tree.setHeaderHidden(True)

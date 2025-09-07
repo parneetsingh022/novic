@@ -664,14 +664,26 @@ class ActivitySidebar(QWidget):
         chevron_right = (resources_dir / "chevron_right.svg").as_posix()
         chevron_down = (resources_dir / "chevron_down.svg").as_posix()
         self._tree.setStyleSheet(
-            "QTreeView { background:#242629; color:#e3e5e8; border:none; outline:0; padding-left:5px; }"
-            "QTreeView::viewport { margin-left:5px; }"
-            "QTreeView::item { padding-left:2px; }"
-            "QTreeView::item:selected { background:#3a3d41; }"
+            "QTreeView { background:#242629; color:#e3e5e8; border:none; outline:0; padding:0; font-size:13px; }"
+            "QTreeView::viewport { margin:0; }"
+            "QTreeView::item { padding:1px 4px; border:0; }"
+            "QTreeView::item:hover { background:#33373b; }"
+            "QTreeView::item:selected { background:#3a3f45; }"
             "QTreeView::branch { background: transparent; margin-left:0px; }"
             f"QTreeView::branch:has-children:!has-siblings:closed,QTreeView::branch:closed:has-children {{ image: url({chevron_right}); }}"
             f"QTreeView::branch:open:has-children:!has-siblings,QTreeView::branch:open:has-children {{ image: url({chevron_down}); }}"
         )
+        # Increase tree view font size
+        try:
+            _f = self._tree.font()
+            ps = _f.pointSize()
+            if ps > 0:
+                _f.setPointSize(ps + 2)
+            else:
+                _f.setPointSize(13)
+            self._tree.setFont(_f)
+        except Exception:
+            pass
         self._tree.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._tree.setCursor(Qt.PointingHandCursor)
         self._tree.setCursor(Qt.PointingHandCursor)

@@ -15,6 +15,7 @@ class MainWindow(FramelessWindow):
     def __init__(self):
         # Window now resizable; user can drag edges/corners (frameless custom logic)
         super().__init__(title="Novic", size=(900, 600), resizable=True, show_menu=True)
+        self._last_normal_size = self.size()
         self._register_default_menus()
         self._build_body()
         # restore previous session after UI widgets built
@@ -287,10 +288,39 @@ class MainWindow(FramelessWindow):
             data["tabs"] = self.editors.save_state()
         except Exception:
             data["tabs"] = {}
-        # Window size (width & height)
+        # Window size (width & height) + maximized state
         try:
             sz = self.size()
-            data["window"] = {"width": int(sz.width()), "height": int(sz.height())}
+            win_state: dict[str, object] = {}
+            if self.isMaximized():
+                win_state["maximized"] = True
+                # store current size for reference plus last known normal size
+                win_state["width"] = int(sz.width())
+                win_state["height"] = int(sz.height())
+                try:
+                    normal_sz = getattr(self, "_last_normal_size", None)
+                    if normal_sz is not None:
+                        win_state["normal_width"] = int(normal_sz.width())
+                        win_state["normal_height"] = int(normal_sz.height())
+                    else:
+                        ng = self.normalGeometry()
+                        win_state["normal_width"] = int(ng.width())
+                        win_state["normal_height"] = int(ng.height())
+                except Exception:
+                    pass
+            else:
+                win_state["maximized"] = False
+                win_state["width"] = int(sz.width())
+                win_state["height"] = int(sz.height())
+            data["window"] = win_state
+        except Exception:
+            pass
+        # Raw geometry blob (fallback) encoded base64
+        try:
+            from PySide6.QtCore import QByteArray
+            geo = self.saveGeometry()
+            if isinstance(geo, QByteArray):
+                data["geometry"] = bytes(geo.toBase64()).decode("ascii")
         except Exception:
             pass
         # Splitter sizes (sidebar width, editor width)
@@ -315,10 +345,51 @@ class MainWindow(FramelessWindow):
             try:
                 win = payload.get("window", {})
                 if isinstance(win, dict):
-                    w = int(win.get("width", 0) or 0)
-                    h = int(win.get("height", 0) or 0)
-                    if w > 200 and h > 150:  # basic sanity guard
-                        self.resize(w, h)
+                    maximized = bool(win.get("maximized", False))
+                    target_w = int(win.get("normal_width", win.get("width", 0)) or 0)
+                    target_h = int(win.get("normal_height", win.get("height", 0)) or 0)
+                    target_x = win.get("normal_x", win.get("x", None))
+                    target_y = win.get("normal_y", win.get("y", None))
+                    self._requested_restore = {  # type: ignore[attr-defined]
+                        "maximized": maximized,
+                        "width": target_w,
+                        "height": target_h,
+                        "x": target_x,
+                        "y": target_y,
+                    }
+                    applied_geo = False
+                    try:
+                        geo_enc = payload.get("geometry")
+                        if isinstance(geo_enc, str) and geo_enc:
+                            from PySide6.QtCore import QByteArray
+                            ba = QByteArray.fromBase64(geo_enc.encode("ascii"))
+                            if ba and self.restoreGeometry(ba):
+                                applied_geo = True
+                                print(f"[SessionDebug] restore: applied geometry blob (maximized={maximized})")
+                    except Exception:
+                        applied_geo = False
+                    if not applied_geo:
+                        if target_w > 200 and target_h > 150:
+                            self.resize(target_w, target_h)
+                        if isinstance(target_x, int) and isinstance(target_y, int):
+                            try:
+                                self.move(int(target_x), int(target_y))
+                            except Exception:
+                                pass
+                        print(f"[SessionDebug] restore: manual size={target_w}x{target_h} pos={target_x},{target_y} maximized={maximized}")
+                    try:
+                        if not maximized:
+                            self._last_normal_size = self.size()
+                        else:
+                            from PySide6.QtCore import QSize
+                            w_ref = target_w if target_w > 0 else self.width()
+                            h_ref = target_h if target_h > 0 else self.height()
+                            self._last_normal_size = QSize(w_ref, h_ref)
+                    except Exception:
+                        pass
+                    if maximized:
+                        from PySide6.QtCore import QTimer
+                        QTimer.singleShot(0, lambda: (print("[SessionDebug] restore: showMaximized"), self.showMaximized()))
             except Exception:
                 pass
             try:
@@ -342,20 +413,69 @@ class MainWindow(FramelessWindow):
         sf = self._session_file()
         import json
         try:
-            sf.write_text(json.dumps(self._gather_session(), indent=2), encoding="utf-8")
+            payload = self._gather_session()
+            # Debug print of window sizing info before writing
+            try:
+                sz = self.size()
+                ln = getattr(self, "_last_normal_size", None)
+                ln_txt = f"{ln.width()}x{ln.height()}" if ln is not None else "?"
+                print(f"[SessionDebug] closing size={sz.width()}x{sz.height()} maximized={self.isMaximized()} last_normal={ln_txt}")
+            except Exception:
+                pass
+            sf.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            self._session_saved = True  # type: ignore[attr-defined]
         except Exception:
             pass
 
     def eventFilter(self, obj: QObject, ev: QEvent):  # type: ignore[override]
         from PySide6.QtCore import QEvent as _QE
         if ev.type() == _QE.Close:
-            self._save_session()
+            if not getattr(self, "_session_saved", False):
+                self._save_session()
         return super().eventFilter(obj, ev)
 
     def closeEvent(self, event):  # type: ignore[override]
         # Fallback: ensure session saved even if eventFilter missed
         try:
-            self._save_session()
+            if not getattr(self, "_session_saved", False):
+                self._save_session()
         except Exception:
             pass
         super().closeEvent(event)
+
+    def resizeEvent(self, event):  # type: ignore[override]
+        # Track last non-maximized size so we can restore accurately
+        try:
+            if not self.isMaximized() and not self.isMinimized():
+                self._last_normal_size = event.size()
+        except Exception:
+            pass
+        return super().resizeEvent(event)
+
+    def showEvent(self, event):  # type: ignore[override]
+        super().showEvent(event)
+        # Enforce restored size after first show if layout compressed us
+        try:
+            if getattr(self, "_requested_restore", None) and not getattr(self, "_post_show_restored", False):
+                req = self._requested_restore  # type: ignore
+                if not req.get("maximized"):
+                    w = req.get("width")
+                    h = req.get("height")
+                    x = req.get("x")
+                    y = req.get("y")
+                    from PySide6.QtCore import QTimer
+                    def _apply_final():
+                        changed = False
+                        if isinstance(w, int) and isinstance(h, int) and w > 0 and h > 0:
+                            if self.width() != w or self.height() != h:
+                                self.resize(w, h)
+                                changed = True
+                        if isinstance(x, int) and isinstance(y, int):
+                            if self.x() != x or self.y() != y:
+                                self.move(x, y)
+                                changed = True
+                        print(f"[SessionDebug] post-show enforce target={w}x{h} actual={self.width()}x{self.height()} changed={changed}")
+                    QTimer.singleShot(0, _apply_final)
+                self._post_show_restored = True  # type: ignore[attr-defined]
+        except Exception:
+            pass

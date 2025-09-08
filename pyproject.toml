@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "novic"
-version = "0.1.0.dev3"
+version = "0.1.0.dev4"
 description = "Novic - a lightweight and beginner-friendly code editor built with PySide6."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -32,7 +32,7 @@ novic = "novic.main:main"
 
 
 [tool.bumpversion]
-current_version = "0.1.0.dev3"
+current_version = "0.1.0.dev4"
 commit = true
 tag = false
 tag_name = "v{new_version}"

@@ -1,7 +1,14 @@
 from __future__ import annotations
-from PySide6.QtCore import Qt, QRect, QSize, QElapsedTimer
-from PySide6.QtGui import QColor, QPainter, QTextFormat
-from PySide6.QtWidgets import QAbstractScrollArea, QPlainTextEdit, QWidget, QTextEdit
+from PySide6.QtCore import Qt, QRect, QSize, QTimer
+from PySide6.QtGui import QColor, QPainter, QTextFormat, QGuiApplication, QSyntaxHighlighter, QTextCharFormat
+
+# Lazy import holder for syntax to avoid cost if unused
+try:
+    from novic.syntax import SyntaxRegistry, load_all_languages
+    _SYNTAX_REGISTRY = load_all_languages()
+except Exception:  # pragma: no cover - syntax not critical
+    _SYNTAX_REGISTRY = None
+from PySide6.QtWidgets import QPlainTextEdit, QWidget, QTextEdit
 
 
 class _LineNumberArea(QWidget):
@@ -28,18 +35,25 @@ class CodeEditor(QPlainTextEdit):
         super().__init__(parent)
         # ---- core state ----
         self._line_number_area = _LineNumberArea(self)
-        self._enable_overscroll = False  # disabled for stability
+        self._enable_overscroll = False
         self._bottom_overscroll = 0
         self._last_left_margin = -1
         self._last_bottom_margin = -1
         self._in_resize = False
+        # syntax state
+        self._active_language = None
+        self._highlighter = _SyntaxHighlighter(self.document())
 
         # ---- scrolling (direct wheel steps, fractional accumulation) ----
-        # Base lines-per-notch for smooth scrolling; acceleration adapts when user spins fast
-        self._wheel_lines_per_notch = 0.2
+        try:
+            system_lines = QGuiApplication.styleHints().wheelScrollLines() or 3
+        except Exception:
+            system_lines = 3
+        if system_lines <= 0:
+            system_lines = 3
+        self._base_wheel_lines = float(system_lines)
+        self._wheel_lines_per_notch = self._base_wheel_lines
         self._wheel_accum = 0.0
-        self._wheel_timer = QElapsedTimer()
-        self._wheel_timer.invalidate()
         self.verticalScrollBar().setSingleStep(self.fontMetrics().height())
 
         # ---- performance hints ----
@@ -63,6 +77,7 @@ class CodeEditor(QPlainTextEdit):
         self.blockCountChanged.connect(self._on_block_count_changed)
         self.updateRequest.connect(self._on_update_request)
         self.cursorPositionChanged.connect(self._highlight_current_line)
+        self.textChanged.connect(self._on_text_changed)
 
         # ---- initial visuals ----
         self._apply_margins()
@@ -150,15 +165,16 @@ class CodeEditor(QPlainTextEdit):
 
     # ---- highlight current line ---------------------------------------
     def _highlight_current_line(self):
+        # Only current line background (syntax colors handled by highlighter)
         if self.isReadOnly():
             self.setExtraSelections([])
             return
-        selection = QTextEdit.ExtraSelection()
-        selection.format.setBackground(QColor('#2d3135'))
-        selection.format.setProperty(QTextFormat.FullWidthSelection, True)
-        selection.cursor = self.textCursor()
-        selection.cursor.clearSelection()
-        self.setExtraSelections([selection])
+        line_sel = QTextEdit.ExtraSelection()
+        line_sel.format.setBackground(QColor('#2d3135'))
+        line_sel.format.setProperty(QTextFormat.FullWidthSelection, True)
+        line_sel.cursor = self.textCursor()
+        line_sel.cursor.clearSelection()
+        self.setExtraSelections([line_sel])
 
     # ---- convenience ---------------------------------------------------
     def setPlainText(self, text: str):  # type: ignore[override]
@@ -166,6 +182,33 @@ class CodeEditor(QPlainTextEdit):
         self.document().setModified(False)
         self._apply_margins()
         self._recalc_overscroll()
+        # rehighlight if language active
+        if self._active_language:
+            self._highlighter.schedule_refresh(self._active_language)
+
+    # ---- syntax highlighting API -------------------------------------
+    def applySyntaxByName(self, name: str):
+        if not _SYNTAX_REGISTRY:
+            return
+        lang = _SYNTAX_REGISTRY.get(name)
+        if not lang:
+            return
+        self._active_language = lang
+        self._highlighter.schedule_refresh(lang, immediate=True)
+
+    def applySyntaxForExtension(self, ext: str):
+        if not _SYNTAX_REGISTRY:
+            return
+        lang = _SYNTAX_REGISTRY.get_for_extension(ext)
+        if not lang:
+            return
+        self._active_language = lang
+        self._highlighter.schedule_refresh(lang, immediate=True)
+
+    def _on_text_changed(self):
+        if self._active_language:
+            self._highlighter.schedule_refresh(self._active_language)
+        self._highlight_current_line()
 
     # ---- lightweight wheel handling (no animation) -------------------
     def wheelEvent(self, event):  # type: ignore[override]
@@ -177,27 +220,16 @@ class CodeEditor(QPlainTextEdit):
             return super().wheelEvent(event)
         sb = self.verticalScrollBar()
         line_h = self.fontMetrics().height()
-        # Adaptive acceleration: quicker successive wheel events scroll farther (like VSCode)
-        interval = 999
-        if self._wheel_timer.isValid():
-            interval = self._wheel_timer.elapsed()
-        self._wheel_timer.restart()
-        accel = 1.0
-        if interval < 60:
-            accel = 1.7
-        elif interval < 100:
-            accel = 1.4
-        elif interval < 160:
-            accel = 1.15
-        effective_lpn = self._wheel_lines_per_notch * accel
-        # Modifier keys: Ctrl for precision (slower), Shift for faster
+        # Determine effective lines per notch (modifiers emulate VSCode style acceleration)
+        lines_per_notch = self._wheel_lines_per_notch
         mods = event.modifiers()
-        if mods & Qt.ControlModifier:
-            effective_lpn *= 0.5
-        if mods & Qt.ShiftModifier:
-            effective_lpn *= 1.35
+        if mods & Qt.ShiftModifier:  # fast scroll
+            lines_per_notch *= 3.0
+        elif mods & Qt.AltModifier:  # slow scroll
+            lines_per_notch = max(1.0, lines_per_notch * 0.5)
+
         # Compute fractional pixel movement for fine control
-        delta_lines = -(delta_y / 120.0) * effective_lpn
+        delta_lines = -(delta_y / 120.0) * lines_per_notch
         pixels = delta_lines * line_h + self._wheel_accum
         step = int(pixels)
         self._wheel_accum = pixels - step
@@ -209,24 +241,110 @@ class CodeEditor(QPlainTextEdit):
         event.accept()
 
     # Public API to adjust scroll speed at runtime
-    def setScrollLinesPerNotch(self, lines: float):
-        if lines > 0:
-            self._wheel_lines_per_notch = lines
-            self._wheel_accum = 0.0
-            self._wheel_timer.invalidate()
+    def setScrollLinesPerNotch(self, lines: float | None = None, *, use_system: bool = False):
+        """Adjust base scrolling speed.
 
-    # Convenience: set a comfort profile ("slow", "default", "fast")
-    def setScrollProfile(self, profile: str):
-        p = profile.lower()
-        if p == "slow":
-            self.setScrollLinesPerNotch(1.2)
-            self.setScrollLinesPerNotch(0.8)
-        elif p == "fast":
-            self.setScrollLinesPerNotch(2.4)
-            self.setScrollLinesPerNotch(1.9)
-        else:
-            self.setScrollLinesPerNotch(1.9)
-            self.setScrollLinesPerNotch(1.2)
+        lines: explicit lines per wheel notch (overrides system if provided)
+        use_system: when True, revert to system wheelScrollLines()
+        """
+        if use_system:
+            try:
+                sys_lines = QGuiApplication.styleHints().wheelScrollLines()
+                if sys_lines > 0:
+                    self._base_wheel_lines = float(sys_lines)
+            except Exception:
+                pass
+            self._wheel_lines_per_notch = self._base_wheel_lines
+        elif lines and lines > 0:
+            self._wheel_lines_per_notch = float(lines)
+        self._wheel_accum = 0.0
 
 
 __all__ = ["CodeEditor"]
+
+
+class _SyntaxHighlighter(QSyntaxHighlighter):
+    """Simple syntax highlighter with debounced lexing and block-local formatting."""
+
+    def __init__(self, doc):
+        super().__init__(doc)
+        self._tokens: list[tuple] = []
+        self._style: dict = {}
+        self._starts: list[int] = []
+        self._pending_language = None
+        self._debounce_timer: QTimer | None = None
+        self._busy = False
+
+    def schedule_refresh(self, language, immediate: bool = False):
+        self._pending_language = language
+        if immediate:
+            self._run_refresh()
+            return
+        if self._debounce_timer is None:
+            self._debounce_timer = QTimer()
+            self._debounce_timer.setSingleShot(True)
+            self._debounce_timer.timeout.connect(self._run_refresh)
+        # restart timer (150ms debounce)
+        self._debounce_timer.start(150)
+
+    def _run_refresh(self):
+        if self._busy:
+            # avoid re-entrancy; schedule again
+            if self._debounce_timer:
+                self._debounce_timer.start(50)
+            return
+        lang = self._pending_language
+        if not lang:
+            return
+        self._busy = True
+        try:
+            try:
+                text = self.document().toPlainText()
+            except Exception:
+                text = ""
+            # Hard limits to avoid huge regex slowdown
+            if len(text) > 500_000:
+                # Disable highlighting for very large files for stability
+                self._tokens = []
+                self._starts = []
+                self._style = {}
+                self.rehighlight()
+                return
+            sample = text[:50_000]
+            try:
+                tokens = lang.lexer(sample)[:4000]
+            except Exception:
+                tokens = []
+            self._tokens = tokens
+            self._style = getattr(lang, 'style', {}) or {}
+            self._starts = [t[2] for t in self._tokens]
+            self.rehighlight()
+        finally:
+            self._busy = False
+
+    def highlightBlock(self, text):  # type: ignore[override]
+        if not self._tokens:
+            return
+        block_start = self.currentBlock().position()
+        block_end = block_start + len(text)
+        import bisect
+        idx = bisect.bisect_left(self._starts, block_start) - 1
+        if idx < 0:
+            idx = 0
+        n = len(self._tokens)
+        while idx < n:
+            kind, _value, start, end = self._tokens[idx]
+            if start >= block_end:
+                break
+            if end > block_start:
+                color = None
+                if isinstance(self._style, dict):
+                    color = self._style.get(kind, {}).get('color')
+                if color:
+                    fmt = QTextCharFormat()
+                    fmt.setForeground(QColor(color))
+                    s = max(start - block_start, 0)
+                    e = min(end - block_start, len(text))
+                    if e > s:
+                        self.setFormat(s, e - s, fmt)
+            idx += 1

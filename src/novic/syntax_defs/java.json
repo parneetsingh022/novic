@@ -1,0 +1,23 @@
+{
+  "name": "Java",
+  "extensions": [".java"],
+  "regexTokens": [
+    {"type": "comment", "pattern": "//[^\n]*"},
+    {"type": "mcomment", "pattern": "/\\*.*?\\*/"},
+    {"type": "string", "pattern": "\"[^\"\n]*\""},
+    {"type": "char", "pattern": "'[^'\n]'"},
+    {"type": "number", "pattern": "\\b\\d+(?:\\.\\d+)?\\b"},
+    {"type": "id", "pattern": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"}
+  ],
+  "keywordTypes": {
+    "id": ["class","public","private","protected","static","void","int","long","float","double","boolean","if","else","for","while","return","new","extends","implements","package","import","null","true","false"]
+  },
+  "styles": {
+    "kw": {"color": "#569cd6"},
+    "comment": {"color": "#6a9955"},
+    "mcomment": {"color": "#6a9955"},
+    "string": {"color": "#ce9178"},
+    "char": {"color": "#ce9178"},
+    "number": {"color": "#b5cea8"}
+  }
+}

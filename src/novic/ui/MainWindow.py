@@ -105,6 +105,11 @@ class MainWindow(FramelessWindow):
         self.add_content_widget(body)
         # ensure close event triggers session save
         self.installEventFilter(self)
+        # connect editor change to footer
+        try:
+            self.editors.currentEditorChanged.connect(self.footer.attach_editor)
+        except Exception:
+            pass
 
 
     def _file_save(self):

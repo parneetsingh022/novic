@@ -1,7 +1,7 @@
 from __future__ import annotations
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, Signal
 from PySide6.QtGui import QIcon, QMouseEvent
 from PySide6.QtWidgets import (
     QWidget,
@@ -139,6 +139,7 @@ class _HoverCloseTabBar(QTabBar):
 
 class TabbedEditor(QWidget):
     """Tabbed text editor container managing multiple CodeEditor instances."""
+    currentEditorChanged = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -227,6 +228,15 @@ class TabbedEditor(QWidget):
             text = f"<Unable to open file>\n{e}"
         editor = CodeEditor(self._stack)
         editor.setPlainText(text)
+        # auto-detect syntax from extension
+        try:
+            ext = Path(norm).suffix
+            if ext:
+                apply_ext = getattr(editor, 'applySyntaxForExtension', None)
+                if callable(apply_ext):
+                    apply_ext(ext)
+        except Exception:
+            pass
         self._stack.addWidget(editor)
         self._editors.append(editor)
         icon = self._icon_for_file(norm)
@@ -236,6 +246,7 @@ class TabbedEditor(QWidget):
         self._tab_bar.setCurrentIndex(tab_index)
         self._stack.setCurrentWidget(editor)
         self._tab_bar._update_close_buttons()
+        self.currentEditorChanged.emit(editor)
 
     def current_editor(self) -> CodeEditor | None:
         w = self._stack.currentWidget()
@@ -266,6 +277,9 @@ class TabbedEditor(QWidget):
             return
         self._set_current_editor_by_tab()
         self._tab_bar._update_close_buttons()
+        cur = self.current_editor()
+        if cur is not None:
+            self.currentEditorChanged.emit(cur)
 
     def _on_tab_moved(self, from_index: int, to_index: int):
         if from_index == to_index:

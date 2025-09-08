@@ -1,0 +1,19 @@
+{
+  "name": "Python",
+  "extensions": [".py"],
+  "regexTokens": [
+    {"type": "comment", "pattern": "#[^\n]*"},
+    {"type": "string", "pattern": "(['\"]).*?\\1"},
+    {"type": "number", "pattern": "\\b\\d+(?:\\.\\d+)?\\b"},
+    {"type": "id", "pattern": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"}
+  ],
+  "keywordTypes": {
+    "id": ["def","class","return","if","elif","else","for","while","import","from","as","with","try","except","finally","yield","lambda","pass","break","continue","in","is","not","and","or","None","True","False"]
+  },
+  "styles": {
+    "kw": {"color": "#c586c0"},
+    "comment": {"color": "#6a9955"},
+    "string": {"color": "#ce9178"},
+    "number": {"color": "#b5cea8"}
+  }
+}

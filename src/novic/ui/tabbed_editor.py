@@ -8,9 +8,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QTabBar,
     QStackedWidget,
-    QTextEdit,
     QToolButton,
 )
+from .code_editor import CodeEditor
 
 
 class _HoverCloseTabBar(QTabBar):
@@ -138,11 +138,10 @@ class _HoverCloseTabBar(QTabBar):
 
 
 class TabbedEditor(QWidget):
-    """Tabbed text editor container with custom close-button behavior."""
+    """Tabbed text editor container managing multiple CodeEditor instances."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
-
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -161,29 +160,21 @@ class TabbedEditor(QWidget):
         layout.addWidget(self._tab_bar)
         layout.addWidget(self._stack, 1)
 
-        self._path_to_index = {}  # type: dict[str, int]
-        try:  # icon registry shared with sidebar
+        self._path_to_index: dict[str, int] = {}
+        try:
             from .file_icons import file_icon_registry  # type: ignore
             from .file_icon_config import apply_file_icon_config  # type: ignore
             apply_file_icon_config()
             self._file_icon_registry = file_icon_registry
         except Exception:
             self._file_icon_registry = None
-        self._editors = []  # type: list[QTextEdit]
+        self._editors: list[CodeEditor] = []
 
         self._apply_style()
         self._tab_bar._update_close_buttons()
 
-    # ---- session persistence -------------------------------------------
+    # ---- session persistence -----------------------------------------
     def save_state(self) -> dict:
-        """Return serialisable state of open tabs.
-
-        Structure:
-        {
-            'tabs': [ absolute file paths in order ],
-            'current': int | None,
-        }
-        """
         tabs: list[str] = []
         for i in range(self._tab_bar.count()):
             p = self._tab_bar.tabToolTip(i)
@@ -193,7 +184,6 @@ class TabbedEditor(QWidget):
         return {"tabs": tabs, "current": cur if 0 <= cur < len(tabs) else None}
 
     def restore_state(self, state: dict):
-        """Restore previously saved tab layout."""
         if not isinstance(state, dict):
             return
         tabs = state.get("tabs", [])
@@ -211,7 +201,7 @@ class TabbedEditor(QWidget):
             self._set_current_editor_by_tab()
         self._tab_bar._update_close_buttons()
 
-    # ---- styling ---------------------------------------------------------
+    # ---- styling -------------------------------------------------------
     def _apply_style(self):
         self._tab_bar.setStyleSheet(
             "QTabBar { background:#1f2123; }"
@@ -223,11 +213,9 @@ class TabbedEditor(QWidget):
             "QTabBar::tab:hover { background:#323539; }"
             "QTabBar::tab + QTabBar::tab { border-left:1px solid #2d3033; }"
         )
-        self._stack.setStyleSheet(
-            "QTextEdit { background:#1f2123; color:#e3e5e8; border:none; padding:6px; }"
-        )
+        self._stack.setStyleSheet("")
 
-    # ---- public API ------------------------------------------------------
+    # ---- public API ----------------------------------------------------
     def open_file(self, path: str):
         norm = str(Path(path).resolve())
         if norm in self._path_to_index:
@@ -237,9 +225,8 @@ class TabbedEditor(QWidget):
             text = Path(norm).read_text(encoding="utf-8", errors="replace")
         except Exception as e:  # pragma: no cover
             text = f"<Unable to open file>\n{e}"
-        editor = QTextEdit(self._stack)
+        editor = CodeEditor(self._stack)
         editor.setPlainText(text)
-        editor.document().setModified(False)
         self._stack.addWidget(editor)
         self._editors.append(editor)
         icon = self._icon_for_file(norm)
@@ -250,9 +237,9 @@ class TabbedEditor(QWidget):
         self._stack.setCurrentWidget(editor)
         self._tab_bar._update_close_buttons()
 
-    def current_editor(self) -> QTextEdit | None:
+    def current_editor(self) -> CodeEditor | None:
         w = self._stack.currentWidget()
-        return w if isinstance(w, QTextEdit) else None
+        return w if isinstance(w, CodeEditor) else None
 
     def current_path(self) -> str | None:
         idx = self._tab_bar.currentIndex()
@@ -260,7 +247,7 @@ class TabbedEditor(QWidget):
             return None
         return self._tab_bar.tabToolTip(idx) or None
 
-    # ---- internal slots --------------------------------------------------
+    # ---- internal slots ------------------------------------------------
     def _close_index(self, index: int):
         if 0 <= index < len(self._editors):
             w = self._editors.pop(index)
@@ -294,7 +281,7 @@ class TabbedEditor(QWidget):
         self._set_current_editor_by_tab()
         self._tab_bar._update_close_buttons()
 
-    # ---- mapping ---------------------------------------------------------
+    # ---- mapping -------------------------------------------------------
     def _rebuild_mapping(self):
         self._path_to_index.clear()
         for i in range(self._tab_bar.count()):
@@ -307,7 +294,7 @@ class TabbedEditor(QWidget):
         if 0 <= idx < len(self._editors):
             self._stack.setCurrentWidget(self._editors[idx])
 
-    # ---- helpers ---------------------------------------------------------
+    # ---- helpers -------------------------------------------------------
     def _icon_for_file(self, path: str) -> QIcon:
         if self._file_icon_registry is not None:
             try:
